@@ -1,0 +1,344 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VUEKUMI frontend and backend on ECS Fargate with EFS persistence and an Application Load Balancer.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: vuekumi
+  ContainerImage:
+    Type: String
+    Description: Full ECR image URI, for example 123456789012.dkr.ecr.us-east-1.amazonaws.com/vuekumi:latest.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two public subnets for the load balancer and Fargate service.
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+  Cpu:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+  Memory:
+    Type: String
+    Default: "1024"
+    AllowedValues: ["512", "1024", "2048", "3072", "4096", "5120", "6144", "7168", "8192"]
+  AdminAccessKey:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+  AdminTokenSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  ContributorTokenSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  BuyerTokenSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: Optional ACM certificate ARN. If omitted, the load balancer exposes HTTP only.
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${AppName}
+      RetentionInDays: 30
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${AppName} public load balancer access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - !If
+          - HasCertificate
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: 0.0.0.0/0
+          - !Ref AWS::NoValue
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${AppName} ECS task access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4180
+          ToPort: 4180
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${AppName} EFS access from ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      BackupPolicy:
+        Status: ENABLED
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub ${AppName}-data
+
+  AccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser:
+        Uid: "1000"
+        Gid: "1000"
+      RootDirectory:
+        Path: /vuekumi
+        CreationInfo:
+          OwnerUid: "1000"
+          OwnerGid: "1000"
+          Permissions: "0755"
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [0, !Ref PublicSubnetIds]
+      SecurityGroups:
+        - !Ref EfsSecurityGroup
+
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [1, !Ref PublicSubnetIds]
+      SecurityGroups:
+        - !Ref EfsSecurityGroup
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref AppName
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - MountTargetA
+      - MountTargetB
+    Properties:
+      Family: !Ref AppName
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: vuekumi-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref FileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref AccessPoint
+              IAM: ENABLED
+      ContainerDefinitions:
+        - Name: !Ref AppName
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 4180
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: PORT
+              Value: "4180"
+            - Name: DATA_DIR
+              Value: /data
+            - Name: ADMIN_ACCESS_KEY
+              Value: !Ref AdminAccessKey
+            - Name: ADMIN_TOKEN_SECRET
+              Value: !Ref AdminTokenSecret
+            - Name: CONTRIBUTOR_TOKEN_SECRET
+              Value: !Ref ContributorTokenSecret
+            - Name: BUYER_TOKEN_SECRET
+              Value: !Ref BuyerTokenSecret
+            - Name: ADMIN_TOKEN_TTL_MS
+              Value: "28800000"
+            - Name: CONTRIBUTOR_TOKEN_TTL_MS
+              Value: "604800000"
+            - Name: BUYER_TOKEN_TTL_MS
+              Value: "604800000"
+            - Name: OTP_TTL_MS
+              Value: "600000"
+          MountPoints:
+            - SourceVolume: vuekumi-data
+              ContainerPath: /data
+              ReadOnly: false
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - node -e "fetch('http://127.0.0.1:4180/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${AppName}-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets: !Ref PublicSubnetIds
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${AppName}-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 4180
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckPath: /api/health
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: "200"
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - !If
+          - HasCertificate
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: "443"
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpListener
+    Properties:
+      ServiceName: !Ref AppName
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+          Subnets: !Ref PublicSubnetIds
+      LoadBalancers:
+        - ContainerName: !Ref AppName
+          ContainerPort: 4180
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ServiceUrl:
+    Description: Public load balancer URL for VUEKUMI.
+    Value: !Sub
+      - "${Scheme}://${DnsName}"
+      - Scheme: !If [HasCertificate, "https", "http"]
+        DnsName: !GetAtt LoadBalancer.DNSName
+  HealthUrl:
+    Description: Health check URL.
+    Value: !Sub
+      - "${Scheme}://${DnsName}/api/health"
+      - Scheme: !If [HasCertificate, "https", "http"]
+        DnsName: !GetAtt LoadBalancer.DNSName
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !Ref Service
+  FileSystemId:
+    Value: !Ref FileSystem

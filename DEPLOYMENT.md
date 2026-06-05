@@ -107,6 +107,16 @@ docker run --rm -p 4180:4180 \
   vuekumi
 ```
 
+## Deploy on AWS
+
+Use ECS Fargate with EFS persistence and an Application Load Balancer:
+
+```sh
+npm run deploy:aws
+```
+
+See [AWS_DEPLOYMENT.md](./AWS_DEPLOYMENT.md) for AWS prerequisites, environment variables, CloudFormation details, SSL/domain setup, and update workflow.
+
 ## Deploy on Railway/Fly/other Node hosts
 
 Use the same runtime values:

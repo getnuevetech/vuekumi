@@ -37,6 +37,8 @@ OTP_TTL_MS=600000
 
 The frontend and backend deploy together as one Node web service. See [DEPLOYMENT.md](./DEPLOYMENT.md) for Render, Docker, and generic Node-host instructions.
 
+For AWS, use the ECS Fargate + EFS deployment in [AWS_DEPLOYMENT.md](./AWS_DEPLOYMENT.md).
+
 ## Platform Access Model
 
 - The supplied public VUEKUMI visual template remains the public marketplace layout.
