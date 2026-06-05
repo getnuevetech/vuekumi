@@ -11,7 +11,8 @@ npm start
 Open:
 
 - Public site: `http://localhost:4180/index.html`
-- Admin backend: `http://localhost:4180/admin.html`
+- New admin backend: `http://localhost:4180/admin-v2.html`
+- Legacy admin fallback: `http://localhost:4180/admin.html`
 
 ## Admin Access
 
@@ -50,7 +51,7 @@ For AWS, use the ECS Fargate + EFS deployment in [AWS_DEPLOYMENT.md](./AWS_DEPLO
 
 ## Backend Direction
 
-The old platform backend has been replaced by the new `/api/v2/*` backend contract. The existing admin backend remains available at `/api/admin/*` only until a new admin backend is built. See [NEW_BACKEND_CONTRACT.md](./NEW_BACKEND_CONTRACT.md).
+The old platform backend has been replaced by the new `/api/v2/*` backend contract. The new admin backend is available at `/admin-v2.html` and uses `/api/v2/admin/*`. The old admin remains available at `/admin.html` as a fallback during review. See [NEW_BACKEND_CONTRACT.md](./NEW_BACKEND_CONTRACT.md).
 
 ## Checks
 

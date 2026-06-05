@@ -169,7 +169,7 @@ function platformContract() {
     status: "new-backend",
     legacyAdminBackend: {
       retained: true,
-      reason: "Existing admin.html/admin.js remain active until the replacement admin backend is built.",
+      reason: "Existing admin.html/admin.js remain active as a fallback while the new /admin-v2.html backend is reviewed.",
       routes: ["/api/admin/login", "/api/admin/overview", "/api/admin/access", "/api/admin/users", "/api/admin/content", "/api/admin/activity"]
     },
     legacyPublicWrappers: {
@@ -187,8 +187,64 @@ function platformContract() {
         "POST /api/v2/contributors/me/access"
       ],
       assets: ["GET /api/v2/assets", "POST /api/v2/assets"],
-      commerce: ["GET /api/v2/orders", "POST /api/v2/orders", "POST /api/v2/orders/:id/pay", "GET /api/v2/licenses"]
+      commerce: ["GET /api/v2/orders", "POST /api/v2/orders", "POST /api/v2/orders/:id/pay", "GET /api/v2/licenses"],
+      admin: [
+        "POST /api/v2/admin/login",
+        "GET /api/v2/admin/dashboard",
+        "GET|PUT /api/v2/admin/access",
+        "GET|PUT /api/v2/admin/config",
+        "GET|POST /api/v2/admin/users",
+        "PATCH /api/v2/admin/users/:id",
+        "GET /api/v2/admin/contributors",
+        "GET|POST /api/v2/admin/assets",
+        "PATCH /api/v2/admin/assets/:id",
+        "POST /api/v2/admin/assets/:id/enhance",
+        "GET /api/v2/admin/commerce",
+        "GET|PUT /api/v2/admin/integrations",
+        "GET /api/v2/admin/activity"
+      ]
     }
+  };
+}
+
+function adminDashboardV2(state) {
+  const overview = adminOverview(state);
+  return {
+    ...overview,
+    queues: {
+      identityReview: state.contributorProfiles.filter((profile) => !profileComplete(state, profile)).length,
+      aiEnhancement: state.aiJobs.filter((job) => job.status !== "Enhanced").length,
+      faceApproval: state.faceApprovalCases.filter((item) => !String(item.status || "").toLowerCase().includes("release on file")).length,
+      moderation: state.assets.filter((asset) => !["Approved", "Rejected"].includes(asset.status)).length,
+      paymentCredentials: integrationMatrix(state).paymentProviders.filter((provider) => provider.enabled && !provider.credentialsLoaded).length
+    },
+    contentMosaic: state.assets.slice(0, 18),
+    contributorProfiles: state.contributorProfiles.slice(0, 8),
+    orders: state.orders.slice(0, 8),
+    licenses: state.licenses.slice(0, 8)
+  };
+}
+
+function adminContributorRecords(state) {
+  return state.contributorProfiles.map((profile) => {
+    const user = state.users.find((item) => item.id === profile.userId) || {};
+    return {
+      ...profile,
+      user,
+      profileComplete: profileComplete(state, profile),
+      allowedCategories: allowedCategoriesForContributor(state, profile.type)
+    };
+  });
+}
+
+function adminCommerceState(state) {
+  return {
+    orders: state.orders,
+    licenses: state.licenses,
+    payouts: state.payouts,
+    plans: state.config.plans,
+    paymentProviders: integrationMatrix(state).paymentProviders,
+    countryGateways: integrationMatrix(state).countryGateways
   };
 }
 
@@ -379,6 +435,200 @@ async function handleV2Api(req, res, url) {
 
   if (method === "GET" && url.pathname === "/api/v2/config") return json(res, 200, readState().config);
   if (method === "GET" && url.pathname === "/api/v2/integrations") return json(res, 200, integrationMatrix(readState()));
+
+  if (method === "POST" && url.pathname === "/api/v2/admin/login") {
+    const body = await readBody(req);
+    const identifier = String(body.identifier || "").trim().toLowerCase();
+    const accessKey = String(body.accessKey || "");
+    if (!identifier || !accessKey) return forbidden(res, "Admin identifier and access key are required");
+    if (accessKey !== adminAccessKey) return forbidden(res, "Invalid admin access key");
+    const state = readState();
+    const user = state.users.find((item) =>
+      item.accountGroup === "Admin" &&
+      item.status === "Active" &&
+      [item.email, item.phone, item.name].some((value) => String(value || "").trim().toLowerCase() === identifier)
+    );
+    if (!user) return forbidden(res, "Admin user is not active or does not exist");
+    const role = activeRoleForUser(state, user);
+    const issued = issueAdminSession(state, user, role);
+    audit(state, "admin.v2.login", { id: user.id, role: role?.name || user.adminRole }, user.id);
+    writeState(state);
+    return json(res, 200, {
+      ok: true,
+      session: { token: issued.token, expiresAt: issued.expiresAt, type: "admin" },
+      user: publicAdminUser(user, role),
+      contract: platformContract()
+    });
+  }
+
+  if (url.pathname.startsWith("/api/v2/admin/")) {
+    const state = readState();
+    if (!requireAdmin(req, res, state)) return;
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/dashboard") {
+      if (!requireAdminPermission(req, res, "overview")) return;
+      return json(res, 200, adminDashboardV2(state));
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/access") {
+      if (!requireAdminPermission(req, res, "access")) return;
+      return json(res, 200, {
+        roles: state.access.roles,
+        userCategories: state.access.userCategories,
+        photoCategories: state.config.photoCategories,
+        contributorTypes: state.config.contributorTypes,
+        enduserTypes: state.config.userTypes,
+        contributorPermissions: state.config.contributorPermissions,
+        permissions: permissionList()
+      });
+    }
+
+    if (method === "PUT" && url.pathname === "/api/v2/admin/access") {
+      if (!requireAdminPermission(req, res, "access")) return;
+      const body = await readBody(req);
+      if (Array.isArray(body.roles)) state.access.roles = body.roles.map(normalizeRole);
+      if (Array.isArray(body.userCategories)) state.access.userCategories = body.userCategories.map(normalizeUserCategory);
+      if (Array.isArray(body.photoCategories)) state.config.photoCategories = body.photoCategories;
+      if (Array.isArray(body.contributorTypes)) state.config.contributorTypes = body.contributorTypes;
+      if (Array.isArray(body.enduserTypes)) state.config.userTypes = body.enduserTypes;
+      if (body.contributorPermissions && typeof body.contributorPermissions === "object") state.config.contributorPermissions = body.contributorPermissions;
+      audit(state, "admin.v2.access.updated", { roles: state.access.roles.length, userCategories: state.access.userCategories.length }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, {
+        roles: state.access.roles,
+        userCategories: state.access.userCategories,
+        photoCategories: state.config.photoCategories,
+        contributorTypes: state.config.contributorTypes,
+        enduserTypes: state.config.userTypes,
+        contributorPermissions: state.config.contributorPermissions,
+        permissions: permissionList()
+      });
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/config") {
+      if (!requireAdminPermission(req, res, "settings")) return;
+      return json(res, 200, { config: state.config, contract: platformContract() });
+    }
+
+    if (method === "PUT" && url.pathname === "/api/v2/admin/config") {
+      if (!requireAdminPermission(req, res, "settings")) return;
+      const body = await readBody(req);
+      state.config = normalizeConfig({ ...state.config, ...(body.config || body) });
+      audit(state, "admin.v2.config.updated", { keys: Object.keys(body.config || body) }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, { config: state.config });
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/users") {
+      if (!requireAdminPermission(req, res, "users")) return;
+      return json(res, 200, { items: state.users, count: state.users.length });
+    }
+
+    if (method === "POST" && url.pathname === "/api/v2/admin/users") {
+      if (!requireAdminPermission(req, res, "users")) return;
+      const user = normalizeUser(await readBody(req));
+      state.users.unshift(user);
+      if (user.accountGroup === "Contributor" && !findContributorProfile(state, user.id)) {
+        state.contributorProfiles.unshift(normalizeContributorProfile({ userId: user.id, type: user.category, country: user.country }, user));
+      }
+      audit(state, "admin.v2.user.created", { id: user.id, accountGroup: user.accountGroup, category: user.category }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 201, { user });
+    }
+
+    const v2AdminUserRoute = url.pathname.match(/^\/api\/v2\/admin\/users\/([^/]+)$/);
+    if (method === "PATCH" && v2AdminUserRoute) {
+      if (!requireAdminPermission(req, res, "users")) return;
+      const index = state.users.findIndex((item) => item.id === v2AdminUserRoute[1]);
+      if (index < 0) return notFound(res);
+      state.users[index] = normalizeUser({ ...state.users[index], ...(await readBody(req)), id: state.users[index].id });
+      const profile = findContributorProfile(state, state.users[index].id);
+      if (profile) syncUserFromContributor(state, state.users[index], profile);
+      audit(state, "admin.v2.user.updated", { id: state.users[index].id, status: state.users[index].status, category: state.users[index].category }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, { user: state.users[index] });
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/contributors") {
+      if (!requireAdminPermission(req, res, "users")) return;
+      const items = adminContributorRecords(state);
+      return json(res, 200, { items, count: items.length, allowedCountries: allowedContributorCountries(state) });
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/assets") {
+      if (!requireAdminPermission(req, res, "content")) return;
+      return json(res, 200, { items: state.assets, aiJobs: state.aiJobs, faceApprovalCases: state.faceApprovalCases, count: state.assets.length });
+    }
+
+    if (method === "POST" && url.pathname === "/api/v2/admin/assets") {
+      if (!requireAdminPermission(req, res, "content")) return;
+      const asset = normalizeAsset(await readBody(req));
+      asset.status = asset.status || uploadStatus(state, asset);
+      state.assets.unshift(asset);
+      audit(state, "admin.v2.asset.created", { id: asset.id, category: asset.category, status: asset.status }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 201, { asset });
+    }
+
+    const v2AdminAssetRoute = url.pathname.match(/^\/api\/v2\/admin\/assets\/([^/]+)$/);
+    if (method === "PATCH" && v2AdminAssetRoute) {
+      if (!requireAdminPermission(req, res, "content")) return;
+      const index = state.assets.findIndex((item) => item.id === v2AdminAssetRoute[1]);
+      if (index < 0) return notFound(res);
+      state.assets[index] = normalizeAsset({ ...state.assets[index], ...(await readBody(req)), id: state.assets[index].id });
+      state.assets[index].visibility = state.assets[index].status === "Approved" ? "Public" : state.assets[index].visibility;
+      state.moderationCases.unshift({ id: uniqueId("moderation"), assetId: state.assets[index].id, status: state.assets[index].status, note: state.assets[index].moderationNote || "", createdAt: new Date().toISOString() });
+      audit(state, "admin.v2.asset.updated", { id: state.assets[index].id, status: state.assets[index].status, category: state.assets[index].category }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, { asset: state.assets[index] });
+    }
+
+    const v2AdminEnhanceRoute = url.pathname.match(/^\/api\/v2\/admin\/assets\/([^/]+)\/enhance$/);
+    if (method === "POST" && v2AdminEnhanceRoute) {
+      if (!requireAdminPermission(req, res, "content")) return;
+      const asset = state.assets.find((item) => item.id === v2AdminEnhanceRoute[1]);
+      if (!asset) return notFound(res);
+      const previousQuality = Number(asset.quality || 0);
+      asset.quality = Math.min(100, previousQuality + 18);
+      asset.status = uploadStatus(state, asset);
+      state.aiJobs.unshift({ id: uniqueId("ai-job"), assetId: asset.id, status: "Enhanced", qualityBefore: previousQuality, qualityAfter: asset.quality, createdAt: new Date().toISOString() });
+      audit(state, "admin.v2.asset.enhanced", { id: asset.id, quality: asset.quality, status: asset.status }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, { asset });
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/commerce") {
+      if (!requireAdminPermission(req, res, "overview")) return;
+      return json(res, 200, adminCommerceState(state));
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/integrations") {
+      if (!requireAdminPermission(req, res, "settings")) return;
+      return json(res, 200, { integrations: integrationMatrix(state), config: state.config });
+    }
+
+    if (method === "PUT" && url.pathname === "/api/v2/admin/integrations") {
+      if (!requireAdminPermission(req, res, "settings")) return;
+      const body = await readBody(req);
+      if (Array.isArray(body.paymentProviders)) state.config.paymentProviders = body.paymentProviders;
+      if (Array.isArray(body.gateways)) state.config.gateways = body.gateways;
+      if (Array.isArray(body.smsProviders)) state.config.smsProviders = body.smsProviders;
+      if (body.subscriptionGateway) state.config.subscriptionGateway = body.subscriptionGateway;
+      audit(state, "admin.v2.integrations.updated", {
+        paymentProviders: state.config.paymentProviders.length,
+        countryGateways: state.config.gateways.length,
+        smsProviders: state.config.smsProviders.length
+      }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, { integrations: integrationMatrix(state), config: state.config });
+    }
+
+    if (method === "GET" && url.pathname === "/api/v2/admin/activity") {
+      if (!requireAdminPermission(req, res, "activity")) return;
+      return json(res, 200, { items: adminActivity(state), auditLog: state.auditLog, platformActivities: state.platformActivities });
+    }
+  }
+
   if (method === "POST" && url.pathname === "/api/v2/auth/otp/send") return sendOtpChallenge(req, res, { apiVersion: "v2" });
   if (method === "POST" && url.pathname === "/api/v2/auth/otp/verify") return verifyContributorOtp(req, res, { apiVersion: "v2" });
   if (method === "GET" && url.pathname === "/api/v2/contributors/me") return contributorMe(req, res);

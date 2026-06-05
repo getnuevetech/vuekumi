@@ -1,0 +1,445 @@
+:root {
+  --vk-bg: #080706;
+  --vk-panel: #12100d;
+  --vk-panel-2: #1b1712;
+  --vk-paper: #f4efe5;
+  --vk-muted: #a99f91;
+  --vk-line: rgba(255, 255, 255, 0.12);
+  --vk-amber: #e8a838;
+  --vk-green: #4fb477;
+  --vk-red: #e45c4f;
+  --vk-blue: #6aa8ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(232, 168, 56, 0.16), transparent 28rem),
+    linear-gradient(135deg, #050404 0%, #11100e 54%, #20150b 100%);
+  color: var(--vk-paper);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  color: inherit;
+}
+
+.vk-admin-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 284px minmax(0, 1fr);
+}
+
+.vk-admin-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 22px;
+  border-right: 1px solid var(--vk-line);
+  background: rgba(8, 7, 6, 0.92);
+  backdrop-filter: blur(18px);
+}
+
+.vk-admin-brand {
+  display: grid;
+  gap: 4px;
+  min-height: 84px;
+  padding: 16px;
+  border: 1px solid rgba(232, 168, 56, 0.36);
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(232, 168, 56, 0.22), transparent),
+    rgba(255, 255, 255, 0.04);
+  text-decoration: none;
+}
+
+.vk-admin-brand strong {
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: 30px;
+  letter-spacing: 0.06em;
+}
+
+.vk-admin-brand span,
+.vk-eyebrow {
+  color: var(--vk-amber);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.vk-admin-nav {
+  display: grid;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.vk-admin-nav button,
+.vk-admin-actions a,
+.vk-admin-actions button,
+.vk-button {
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid var(--vk-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--vk-paper);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.vk-admin-nav button {
+  justify-content: flex-start;
+  border-radius: 12px;
+  text-align: left;
+}
+
+.vk-admin-nav button.active,
+.vk-button.primary {
+  border-color: var(--vk-amber);
+  background: var(--vk-amber);
+  color: #100d08;
+}
+
+.vk-admin-mini-mosaic {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 28px;
+}
+
+.vk-admin-mini-mosaic span {
+  min-height: 72px;
+  border-radius: 14px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.14), transparent),
+    linear-gradient(45deg, #2f1b0c, #be7c22 48%, #1a1310);
+}
+
+.vk-admin-mini-mosaic span:nth-child(2n) {
+  min-height: 112px;
+  background: linear-gradient(145deg, #332114, #09120f 45%, #2d5f48);
+}
+
+.vk-admin-mini-mosaic span:nth-child(3n) {
+  background: linear-gradient(145deg, #1d1714, #77392f 45%, #e8a838);
+}
+
+.vk-admin-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--vk-line);
+  background: rgba(8, 7, 6, 0.82);
+  backdrop-filter: blur(18px);
+}
+
+.vk-admin-topbar h1 {
+  margin: 4px 0 0;
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: clamp(34px, 5vw, 70px);
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+.vk-admin-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vk-admin-app {
+  padding: 24px;
+}
+
+.vk-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.vk-panel {
+  grid-column: span 6;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--vk-line);
+  border-radius: 22px;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.06), transparent),
+    rgba(18, 16, 13, 0.94);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.vk-panel.full {
+  grid-column: 1 / -1;
+}
+
+.vk-panel.third {
+  grid-column: span 4;
+}
+
+.vk-panel h2,
+.vk-panel h3 {
+  margin: 6px 0 8px;
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: 30px;
+}
+
+.vk-panel p {
+  color: var(--vk-muted);
+  line-height: 1.6;
+}
+
+.vk-hero-panel {
+  min-height: 320px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.vk-hero-grid {
+  display: grid;
+  min-height: 320px;
+  grid-template-columns: 1.2fr 0.8fr;
+}
+
+.vk-hero-copy {
+  padding: 26px;
+}
+
+.vk-hero-copy h2 {
+  max-width: 720px;
+  font-size: clamp(42px, 7vw, 98px);
+  line-height: 0.88;
+  text-transform: uppercase;
+}
+
+.vk-mosaic {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  padding: 8px;
+}
+
+.vk-mosaic-card {
+  min-height: 82px;
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.13), transparent),
+    linear-gradient(45deg, #1c120b, #b96c1f 48%, #060504);
+}
+
+.vk-mosaic-card:nth-child(3n) {
+  min-height: 142px;
+  background: linear-gradient(135deg, #09110f, #26704a, #d6a43d);
+}
+
+.vk-mosaic-card:nth-child(4n) {
+  min-height: 116px;
+  background: linear-gradient(135deg, #230e0c, #914133, #ede3d0);
+}
+
+.vk-metric strong {
+  display: block;
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: 54px;
+  line-height: 1;
+}
+
+.vk-status {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--vk-muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vk-status.good {
+  background: rgba(79, 180, 119, 0.16);
+  color: var(--vk-green);
+}
+
+.vk-status.warn {
+  background: rgba(232, 168, 56, 0.15);
+  color: var(--vk-amber);
+}
+
+.vk-status.bad {
+  background: rgba(228, 92, 79, 0.16);
+  color: var(--vk-red);
+}
+
+.vk-table {
+  display: grid;
+  gap: 8px;
+}
+
+.vk-row {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--vk-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.vk-row.header {
+  color: var(--vk-amber);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vk-list {
+  display: grid;
+  gap: 10px;
+}
+
+.vk-list article {
+  padding: 12px;
+  border: 1px solid var(--vk-line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.vk-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.vk-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--vk-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.vk-form input,
+.vk-form select,
+.vk-form textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  border: 1px solid var(--vk-line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--vk-paper);
+}
+
+.vk-form textarea {
+  min-height: 220px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.vk-empty {
+  padding: 40px;
+  border: 1px dashed var(--vk-line);
+  border-radius: 22px;
+  color: var(--vk-muted);
+  text-align: center;
+}
+
+.vk-login {
+  display: grid;
+  min-height: calc(100vh - 150px);
+  place-items: center;
+}
+
+.vk-login-card {
+  width: min(920px, 100%);
+  padding: 28px;
+  border: 1px solid rgba(232, 168, 56, 0.28);
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgba(232, 168, 56, 0.18), transparent),
+    rgba(18, 16, 13, 0.96);
+}
+
+.vk-login-card h2 {
+  margin: 8px 0 18px;
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: clamp(44px, 8vw, 92px);
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+.vk-admin-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  max-width: 360px;
+  padding: 12px 14px;
+  border: 1px solid rgba(232, 168, 56, 0.42);
+  border-radius: 14px;
+  background: #11100e;
+  color: var(--vk-paper);
+  opacity: 0;
+  transform: translateY(12px);
+  transition: 0.2s ease;
+}
+
+.vk-admin-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 980px) {
+  .vk-admin-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .vk-admin-sidebar {
+    position: static;
+    height: auto;
+  }
+
+  .vk-admin-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vk-panel,
+  .vk-panel.third {
+    grid-column: 1 / -1;
+  }
+
+  .vk-hero-grid,
+  .vk-form {
+    grid-template-columns: 1fr;
+  }
+}

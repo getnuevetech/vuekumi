@@ -43,10 +43,33 @@ The new backend contract lives under `/api/v2/*`. New frontend, contributor, buy
 - `POST /api/v2/orders`
 - `POST /api/v2/orders/:id/pay`
 - `GET /api/v2/licenses`
+- `POST /api/v2/admin/login`
+- `GET /api/v2/admin/dashboard`
+- `GET|PUT /api/v2/admin/access`
+- `GET|PUT /api/v2/admin/config`
+- `GET|POST /api/v2/admin/users`
+- `PATCH /api/v2/admin/users/:id`
+- `GET /api/v2/admin/contributors`
+- `GET|POST /api/v2/admin/assets`
+- `PATCH /api/v2/admin/assets/:id`
+- `POST /api/v2/admin/assets/:id/enhance`
+- `GET /api/v2/admin/commerce`
+- `GET|PUT /api/v2/admin/integrations`
+- `GET /api/v2/admin/activity`
+
+## New admin backend
+
+The new admin backend UI is:
+
+```txt
+/admin-v2.html
+```
+
+It uses `/api/v2/admin/*` and manages platform dashboard, access, users, contributors, content moderation, commerce, integrations, and activity.
 
 ## Legacy admin backend retained
 
-The existing admin backend is intentionally preserved until a new admin backend is built:
+The existing admin backend is intentionally preserved as a fallback while the new admin backend is reviewed:
 
 - `POST /api/admin/login`
 - `GET /api/admin/overview`

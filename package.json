@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "start:production": "NODE_ENV=production node backend/server.js",
-    "check": "node --check backend/server.js && node --check backend/auth.js && node --check backend/defaults.js && node --check backend/store.js && node --check backend/platform.js && node --check vuekumi-platform.js && node --check admin.js",
+    "check": "node --check backend/server.js && node --check backend/auth.js && node --check backend/defaults.js && node --check backend/store.js && node --check backend/platform.js && node --check vuekumi-platform.js && node --check admin.js && node --check admin-v2.js",
     "check:aws": "bash -n scripts/deploy-aws-ecs.sh",
     "deploy:aws": "bash scripts/deploy-aws-ecs.sh"
   }

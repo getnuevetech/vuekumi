@@ -2,7 +2,13 @@
 
 The old platform backend is replaced by the domain backend under `/api/v2/*`.
 
-The existing admin backend is retained only as a temporary compatibility surface:
+The new admin backend is available at:
+
+```txt
+admin-v2.html -> /api/v2/admin/*
+```
+
+The existing admin backend is retained only as a temporary compatibility fallback:
 
 ```txt
 admin.html + admin.js -> /api/admin/*
@@ -20,6 +26,7 @@ Do not build new contributor, buyer, upload, payment, or public marketplace feat
 | Assets | `/api/v2/assets` | Image upload/listing and category posting enforcement |
 | Orders/licenses | `/api/v2/orders`, `/api/v2/licenses` | Buyer checkout, payment readiness, license records |
 | Integrations | `/api/v2/integrations` | Payment, payout, SMS provider readiness by configured key reference |
+| New admin | `/api/v2/admin/*` | Complete platform command center |
 
 ## New API routes
 
@@ -98,9 +105,46 @@ Payment behavior:
 - payment authorization stays pending until the matching environment secret is loaded
 - successful authorization creates a license record
 
+## New admin backend
+
+```txt
+POST /api/v2/admin/login
+GET /api/v2/admin/dashboard
+GET|PUT /api/v2/admin/access
+GET|PUT /api/v2/admin/config
+GET|POST /api/v2/admin/users
+PATCH /api/v2/admin/users/:id
+GET /api/v2/admin/contributors
+GET|POST /api/v2/admin/assets
+PATCH /api/v2/admin/assets/:id
+POST /api/v2/admin/assets/:id/enhance
+GET /api/v2/admin/commerce
+GET|PUT /api/v2/admin/integrations
+GET /api/v2/admin/activity
+```
+
+New admin UI:
+
+```txt
+/admin-v2.html
+```
+
+New admin scope:
+
+- access control matrix
+- admin roles and user categories
+- contributor verification pipeline
+- content moderation
+- AI enhancement queue
+- face/copyright approval queue
+- buyer orders and licenses
+- payment, payout, and SMS provider variables
+- platform config JSON
+- audit/activity trail
+
 ## Retained old admin backend
 
-These routes stay until the new admin backend exists:
+These routes stay as fallback while `/admin-v2.html` is reviewed:
 
 ```txt
 POST /api/admin/login
