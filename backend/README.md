@@ -22,14 +22,32 @@ The backend is organized around the platform requirements instead of a single pr
 - `platform.js` - domain policies for African contributor eligibility, category posting rules, starter limits, verification, uploads, orders, licenses, and provider readiness.
 - `server.js` - HTTP router, static serving, and API route groups.
 
-## Main API routes
+## New backend API routes
+
+The new backend contract lives under `/api/v2/*`. New frontend, contributor, buyer, mobile, and future admin work should use this namespace.
 
 - `GET /api/health`
-- `GET /api/state`
-- `PUT /api/state`
-- `GET /api/config`
-- `PUT /api/config`
-- `GET /api/integrations`
+- `GET /api/v2/health`
+- `GET /api/v2/platform`
+- `GET /api/v2/config`
+- `GET /api/v2/integrations`
+- `POST /api/v2/auth/otp/send`
+- `POST /api/v2/auth/otp/verify`
+- `GET /api/v2/contributors/me`
+- `PUT|PATCH /api/v2/contributors/me`
+- `POST /api/v2/contributors/me/face-match`
+- `POST /api/v2/contributors/me/access`
+- `GET /api/v2/assets`
+- `POST /api/v2/assets`
+- `GET /api/v2/orders`
+- `POST /api/v2/orders`
+- `POST /api/v2/orders/:id/pay`
+- `GET /api/v2/licenses`
+
+## Legacy admin backend retained
+
+The existing admin backend is intentionally preserved until a new admin backend is built:
+
 - `POST /api/admin/login`
 - `GET /api/admin/overview`
 - `GET|PUT /api/admin/access`
@@ -38,6 +56,18 @@ The backend is organized around the platform requirements instead of a single pr
 - `GET|POST /api/admin/content`
 - `PATCH /api/admin/content/:id`
 - `GET /api/admin/activity`
+
+These routes support `admin.html` and `admin.js`.
+
+## Temporary public compatibility wrappers
+
+The old non-admin public API routes are transition wrappers over the new backend domain handlers so the current public overlay can keep working while it is migrated:
+
+- `GET /api/state`
+- `PUT /api/state`
+- `GET /api/config`
+- `PUT /api/config`
+- `GET /api/integrations`
 - `POST /api/auth/send-otp`
 - `POST /api/auth/verify-otp`
 - `PUT /api/contributor`

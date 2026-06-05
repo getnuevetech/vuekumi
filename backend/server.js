@@ -1,7 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { rootDir, readState, writeState, audit, normalizeConfig, normalizeRole, normalizeUserCategory, normalizeUser, normalizeAsset, uniqueId } = require("./store");
+const { rootDir, readState, writeState, audit, normalizeConfig, normalizeRole, normalizeUserCategory, normalizeUser, normalizeContributorProfile, normalizeAsset, uniqueId } = require("./store");
 const { adminAccessKey, adminTokenTtlMs, contributorTokenTtlMs, otpTtlMs, issueToken, verifyToken, bearerToken, randomOtp } = require("./auth");
 const {
   allowedContributorCountries,
@@ -162,15 +162,264 @@ function issueContributorSession(state, user, profile) {
   return issued;
 }
 
+function platformContract() {
+  return {
+    name: "VUEKUMI Platform API",
+    version: 2,
+    status: "new-backend",
+    legacyAdminBackend: {
+      retained: true,
+      reason: "Existing admin.html/admin.js remain active until the replacement admin backend is built.",
+      routes: ["/api/admin/login", "/api/admin/overview", "/api/admin/access", "/api/admin/users", "/api/admin/content", "/api/admin/activity"]
+    },
+    legacyPublicWrappers: {
+      retained: true,
+      reason: "Current public overlay still calls old /api/* paths and should migrate to /api/v2/* next.",
+      routes: ["/api/state", "/api/auth/*", "/api/contributor", "/api/uploads", "/api/checkout"]
+    },
+    routes: {
+      platform: ["GET /api/v2/health", "GET /api/v2/platform", "GET /api/v2/config", "GET /api/v2/integrations"],
+      auth: ["POST /api/v2/auth/otp/send", "POST /api/v2/auth/otp/verify"],
+      contributor: [
+        "GET /api/v2/contributors/me",
+        "PUT|PATCH /api/v2/contributors/me",
+        "POST /api/v2/contributors/me/face-match",
+        "POST /api/v2/contributors/me/access"
+      ],
+      assets: ["GET /api/v2/assets", "POST /api/v2/assets"],
+      commerce: ["GET /api/v2/orders", "POST /api/v2/orders", "POST /api/v2/orders/:id/pay", "GET /api/v2/licenses"]
+    }
+  };
+}
+
+async function sendOtpChallenge(req, res, options = {}) {
+  const body = await readBody(req);
+  if (!body.phone) return json(res, 400, { error: "phone is required" });
+  const state = readState();
+  const phone = String(body.phone).trim();
+  const code = randomOtp();
+  const expiresAt = Date.now() + otpTtlMs;
+  state.otpChallenges[phone] = {
+    code,
+    purpose: body.purpose || "contributor-login",
+    createdAt: new Date().toISOString(),
+    expiresAt
+  };
+  audit(state, "otp.sent", { phone, provider: "country-sms-provider", apiVersion: options.apiVersion || "legacy" });
+  writeState(state);
+  const payload = { ok: true, phone };
+  if (options.apiVersion === "v2") payload.challenge = { purpose: state.otpChallenges[phone].purpose, expiresAt };
+  if (process.env.NODE_ENV !== "production") payload.otpPreview = code;
+  return json(res, 200, payload);
+}
+
+async function verifyContributorOtp(req, res, options = {}) {
+  const body = await readBody(req);
+  const phone = String(body.phone || "").trim();
+  const state = readState();
+  const challenge = state.otpChallenges[phone];
+  const verified = Boolean(challenge && Date.now() <= Number(challenge.expiresAt) && body.otp === challenge.code);
+  if (!verified) {
+    audit(state, "otp.failed", { phone, apiVersion: options.apiVersion || "legacy" });
+    writeState(state);
+    return json(res, 401, { ok: false, verified: false });
+  }
+
+  const { user, profile } = findOrCreateContributorByPhone(state, phone);
+  user.verificationStatus = "OTP Verified";
+  user.lastActivity = "Phone OTP verified";
+  const issued = issueContributorSession(state, user, profile);
+  delete state.otpChallenges[phone];
+  audit(state, "otp.verified", { phone, userId: user.id, apiVersion: options.apiVersion || "legacy" }, user.id);
+  writeState(state);
+  return json(res, 200, {
+    ok: true,
+    verified: true,
+    token: issued.token,
+    expiresAt: issued.expiresAt,
+    session: options.apiVersion === "v2" ? { token: issued.token, expiresAt: issued.expiresAt, type: "contributor" } : undefined,
+    user,
+    contributor: profile
+  });
+}
+
+function contributorMe(req, res) {
+  const state = readState();
+  const auth = requireContributor(req, res, state);
+  if (!auth) return;
+  return json(res, 200, {
+    user: auth.user,
+    contributor: auth.profile,
+    profileComplete: profileComplete(state, auth.profile),
+    allowedCountries: allowedContributorCountries(state),
+    allowedCategories: allowedCategoriesForContributor(state, auth.profile.type)
+  });
+}
+
+async function updateContributorProfile(req, res) {
+  const state = readState();
+  const auth = requireContributor(req, res, state);
+  if (!auth) return;
+  const body = await readBody(req);
+  const nextProfile = {
+    ...auth.profile,
+    ...(body.contributor || body),
+    userId: auth.user.id
+  };
+  if (!allowedContributorCountries(state).includes(nextProfile.country)) {
+    return json(res, 403, { error: "VUEKUMI currently accepts contributors only from admin-approved African countries." });
+  }
+  const index = state.contributorProfiles.findIndex((profile) => profile.userId === auth.user.id);
+  state.contributorProfiles[index] = normalizeContributorProfile(nextProfile, auth.user);
+  syncUserFromContributor(state, auth.user, state.contributorProfiles[index]);
+  audit(state, "contributor.updated", { userId: auth.user.id, country: nextProfile.country, type: nextProfile.type }, auth.user.id);
+  writeState(state);
+  return json(res, 200, {
+    contributor: state.contributorProfiles[index],
+    profileComplete: profileComplete(state, state.contributorProfiles[index]),
+    allowedCategories: allowedCategoriesForContributor(state, state.contributorProfiles[index].type)
+  });
+}
+
+function runContributorFaceMatch(req, res) {
+  const state = readState();
+  const auth = requireContributor(req, res, state);
+  if (!auth) return;
+  auth.profile.faceScan = true;
+  auth.profile.faceScanScore = Math.max(Number(auth.profile.faceScanScore || 0), Number(state.config.faceConfidence || 88));
+  syncUserFromContributor(state, auth.user, auth.profile);
+  audit(state, "face.match.verified", { userId: auth.user.id, score: auth.profile.faceScanScore }, auth.user.id);
+  writeState(state);
+  return json(res, 200, { contributor: auth.profile, profileComplete: profileComplete(state, auth.profile) });
+}
+
+async function activateContributorAccess(req, res) {
+  const state = readState();
+  const auth = requireContributor(req, res, state);
+  if (!auth) return;
+  const body = await readBody(req);
+  const level = (state.config.contributorAccessLevels || []).find((item) => item.name === (body.accessLevel || auth.profile.accessLevel));
+  if (!level) return json(res, 400, { error: "Unknown contributor access level" });
+  if (level.requiresVerification && !profileComplete(state, auth.profile)) {
+    return json(res, 403, { error: "Complete profile, face, ID, and agreement verification before activating this access level." });
+  }
+  auth.profile.accessLevel = level.name;
+  auth.profile.subscriptionActive = true;
+  syncUserFromContributor(state, auth.user, auth.profile);
+  audit(state, "contributor.subscription.activated", { userId: auth.user.id, accessLevel: level.name, gateway: state.config.subscriptionGateway }, auth.user.id);
+  writeState(state);
+  return json(res, 200, { contributor: auth.profile, gateway: state.config.subscriptionGateway });
+}
+
+async function createContributorAsset(req, res, options = {}) {
+  const state = readState();
+  const auth = requireContributor(req, res, state);
+  if (!auth) return;
+  const result = createAssetForContributor(state, auth.user, auth.profile, await readBody(req));
+  if (result.error) return json(res, result.errorStatus || 400, { error: result.error, uploadAccess: result.uploadAccess });
+  syncUserFromContributor(state, auth.user, auth.profile);
+  audit(state, "upload.created", { id: result.asset.id, userId: auth.user.id, status: result.asset.status, apiVersion: options.apiVersion || "legacy" }, auth.user.id);
+  writeState(state);
+  if (options.apiVersion === "v2") return json(res, 201, { asset: result.asset, uploadAccess: result.uploadAccess });
+  return json(res, 201, { ...result.asset, uploadAccess: result.uploadAccess });
+}
+
+async function createBuyerOrder(req, res, options = {}) {
+  const state = readState();
+  const order = createOrder(state, await readBody(req));
+  state.orders.push(order);
+  audit(state, "checkout.created", { id: order.id, orderNumber: order.orderNumber, plan: order.plan, gateway: order.gateway, provider: order.provider, apiVersion: options.apiVersion || "legacy" });
+  writeState(state);
+  if (options.apiVersion === "v2") return json(res, 201, { order });
+  return json(res, 201, order);
+}
+
+function payBuyerOrder(req, res, orderId, options = {}) {
+  const state = readState();
+  const order = state.orders.find((item) => item.id === orderId);
+  if (!order) return notFound(res);
+  const result = authorizeOrder(state, order);
+  const license = result.order.paymentStatus === "Authorized" ? createLicenseFromOrder(state, result.order) : null;
+  audit(state, result.order.paymentStatus === "Authorized" ? "checkout.payment_authorized" : "checkout.provider_pending", {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    provider: order.provider,
+    apiKeyRef: order.apiKeyRef,
+    apiVersion: options.apiVersion || "legacy"
+  });
+  writeState(state);
+  if (result.error) return json(res, result.statusCode, { error: result.error, checkout: result.order });
+  if (options.apiVersion === "v2") return json(res, result.statusCode, { order: result.order, license });
+  return json(res, result.statusCode, result.order);
+}
+
+async function handleV2Api(req, res, url) {
+  const method = req.method || "GET";
+
+  if (method === "GET" && url.pathname === "/api/v2/health") {
+    return json(res, 200, { ok: true, service: "vuekumi-platform-api", version: 2, contract: platformContract() });
+  }
+
+  if (method === "GET" && url.pathname === "/api/v2/platform") {
+    const state = readState();
+    return json(res, 200, {
+      platform: state.platform,
+      config: state.config,
+      accessModel: {
+        contributorTypes: state.config.contributorTypes,
+        photoCategories: state.config.photoCategories,
+        enduserTypes: state.config.userTypes,
+        contributorPermissions: state.config.contributorPermissions,
+        countryRules: state.config.countryRules
+      },
+      integrations: integrationMatrix(state),
+      contract: platformContract()
+    });
+  }
+
+  if (method === "GET" && url.pathname === "/api/v2/config") return json(res, 200, readState().config);
+  if (method === "GET" && url.pathname === "/api/v2/integrations") return json(res, 200, integrationMatrix(readState()));
+  if (method === "POST" && url.pathname === "/api/v2/auth/otp/send") return sendOtpChallenge(req, res, { apiVersion: "v2" });
+  if (method === "POST" && url.pathname === "/api/v2/auth/otp/verify") return verifyContributorOtp(req, res, { apiVersion: "v2" });
+  if (method === "GET" && url.pathname === "/api/v2/contributors/me") return contributorMe(req, res);
+  if ((method === "PUT" || method === "PATCH") && url.pathname === "/api/v2/contributors/me") return updateContributorProfile(req, res);
+  if (method === "POST" && url.pathname === "/api/v2/contributors/me/face-match") return runContributorFaceMatch(req, res);
+  if (method === "POST" && url.pathname === "/api/v2/contributors/me/access") return activateContributorAccess(req, res);
+  if (method === "GET" && url.pathname === "/api/v2/assets") {
+    const state = readState();
+    return json(res, 200, { items: state.assets, count: state.assets.length });
+  }
+  if (method === "POST" && url.pathname === "/api/v2/assets") return createContributorAsset(req, res, { apiVersion: "v2" });
+  if (method === "GET" && url.pathname === "/api/v2/orders") {
+    const state = readState();
+    return json(res, 200, { items: state.orders, count: state.orders.length });
+  }
+  if (method === "POST" && url.pathname === "/api/v2/orders") return createBuyerOrder(req, res, { apiVersion: "v2" });
+  const orderPay = url.pathname.match(/^\/api\/v2\/orders\/([^/]+)\/pay$/);
+  if (method === "POST" && orderPay) return payBuyerOrder(req, res, orderPay[1], { apiVersion: "v2" });
+  if (method === "GET" && url.pathname === "/api/v2/licenses") {
+    const state = readState();
+    return json(res, 200, { items: state.licenses, count: state.licenses.length });
+  }
+
+  return notFound(res);
+}
+
 async function handleApi(req, res, url) {
   const method = req.method || "GET";
+
+  if (url.pathname.startsWith("/api/v2/")) {
+    return handleV2Api(req, res, url);
+  }
 
   if (method === "GET" && url.pathname === "/api/health") {
     return json(res, 200, {
       ok: true,
       service: "vuekumi-backend",
       version: 2,
-      backend: "redesigned-domain-api"
+      backend: "redesigned-domain-api",
+      newBackend: "/api/v2",
+      legacyAdminBackend: "/api/admin"
     });
   }
 
@@ -343,101 +592,23 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && url.pathname === "/api/auth/send-otp") {
-    const body = await readBody(req);
-    if (!body.phone) return json(res, 400, { error: "phone is required" });
-    const state = readState();
-    const code = randomOtp();
-    state.otpChallenges[String(body.phone).trim()] = {
-      code,
-      purpose: body.purpose || "contributor-login",
-      createdAt: new Date().toISOString(),
-      expiresAt: Date.now() + otpTtlMs
-    };
-    audit(state, "otp.sent", { phone: body.phone, provider: "country-sms-provider" });
-    writeState(state);
-    const payload = { ok: true, phone: body.phone };
-    if (process.env.NODE_ENV !== "production") payload.otpPreview = code;
-    return json(res, 200, payload);
+    return sendOtpChallenge(req, res);
   }
 
   if (method === "POST" && url.pathname === "/api/auth/verify-otp") {
-    const body = await readBody(req);
-    const phone = String(body.phone || "").trim();
-    const state = readState();
-    const challenge = state.otpChallenges[phone];
-    const verified = Boolean(challenge && Date.now() <= Number(challenge.expiresAt) && body.otp === challenge.code);
-    if (!verified) {
-      audit(state, "otp.failed", { phone });
-      writeState(state);
-      return json(res, 401, { ok: false, verified: false });
-    }
-
-    const { user, profile } = findOrCreateContributorByPhone(state, phone);
-    user.verificationStatus = "OTP Verified";
-    user.lastActivity = "Phone OTP verified";
-    const issued = issueContributorSession(state, user, profile);
-    delete state.otpChallenges[phone];
-    audit(state, "otp.verified", { phone, userId: user.id }, user.id);
-    writeState(state);
-    return json(res, 200, {
-      ok: true,
-      verified: true,
-      token: issued.token,
-      expiresAt: issued.expiresAt,
-      user,
-      contributor: profile
-    });
+    return verifyContributorOtp(req, res);
   }
 
   if (method === "PUT" && url.pathname === "/api/contributor") {
-    const state = readState();
-    const auth = requireContributor(req, res, state);
-    if (!auth) return;
-    const body = await readBody(req);
-    const nextProfile = {
-      ...auth.profile,
-      ...(body.contributor || body),
-      userId: auth.user.id
-    };
-    if (!allowedContributorCountries(state).includes(nextProfile.country)) {
-      return json(res, 403, { error: "VUEKUMI currently accepts contributors only from admin-approved African countries." });
-    }
-    const index = state.contributorProfiles.findIndex((profile) => profile.userId === auth.user.id);
-    state.contributorProfiles[index] = require("./store").normalizeContributorProfile(nextProfile, auth.user);
-    syncUserFromContributor(state, auth.user, state.contributorProfiles[index]);
-    audit(state, "contributor.updated", { userId: auth.user.id, country: nextProfile.country, type: nextProfile.type }, auth.user.id);
-    writeState(state);
-    return json(res, 200, { contributor: state.contributorProfiles[index], profileComplete: profileComplete(state, state.contributorProfiles[index]) });
+    return updateContributorProfile(req, res);
   }
 
   if (method === "POST" && url.pathname === "/api/contributor/face-match") {
-    const state = readState();
-    const auth = requireContributor(req, res, state);
-    if (!auth) return;
-    auth.profile.faceScan = true;
-    auth.profile.faceScanScore = Math.max(Number(auth.profile.faceScanScore || 0), Number(state.config.faceConfidence || 88));
-    syncUserFromContributor(state, auth.user, auth.profile);
-    audit(state, "face.match.verified", { userId: auth.user.id, score: auth.profile.faceScanScore }, auth.user.id);
-    writeState(state);
-    return json(res, 200, { contributor: auth.profile, profileComplete: profileComplete(state, auth.profile) });
+    return runContributorFaceMatch(req, res);
   }
 
   if (method === "POST" && url.pathname === "/api/subscriptions/contributor") {
-    const state = readState();
-    const auth = requireContributor(req, res, state);
-    if (!auth) return;
-    const body = await readBody(req);
-    const level = (state.config.contributorAccessLevels || []).find((item) => item.name === (body.accessLevel || auth.profile.accessLevel));
-    if (!level) return json(res, 400, { error: "Unknown contributor access level" });
-    if (level.requiresVerification && !profileComplete(state, auth.profile)) {
-      return json(res, 403, { error: "Complete profile, face, ID, and agreement verification before activating this access level." });
-    }
-    auth.profile.accessLevel = level.name;
-    auth.profile.subscriptionActive = true;
-    syncUserFromContributor(state, auth.user, auth.profile);
-    audit(state, "contributor.subscription.activated", { userId: auth.user.id, accessLevel: level.name, gateway: state.config.subscriptionGateway }, auth.user.id);
-    writeState(state);
-    return json(res, 200, { contributor: auth.profile, gateway: state.config.subscriptionGateway });
+    return activateContributorAccess(req, res);
   }
 
   if (method === "GET" && url.pathname === "/api/uploads") {
@@ -445,15 +616,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && url.pathname === "/api/uploads") {
-    const state = readState();
-    const auth = requireContributor(req, res, state);
-    if (!auth) return;
-    const result = createAssetForContributor(state, auth.user, auth.profile, await readBody(req));
-    if (result.error) return json(res, result.errorStatus || 400, { error: result.error, uploadAccess: result.uploadAccess });
-    syncUserFromContributor(state, auth.user, auth.profile);
-    audit(state, "upload.created", { id: result.asset.id, userId: auth.user.id, status: result.asset.status }, auth.user.id);
-    writeState(state);
-    return json(res, 201, { ...result.asset, uploadAccess: result.uploadAccess });
+    return createContributorAsset(req, res);
   }
 
   const uploadModeration = url.pathname.match(/^\/api\/uploads\/([^/]+)\/moderate$/);
@@ -488,12 +651,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && url.pathname === "/api/checkout") {
-    const state = readState();
-    const order = createOrder(state, await readBody(req));
-    state.orders.push(order);
-    audit(state, "checkout.created", { id: order.id, orderNumber: order.orderNumber, plan: order.plan, gateway: order.gateway, provider: order.provider });
-    writeState(state);
-    return json(res, 201, order);
+    return createBuyerOrder(req, res);
   }
 
   if (method === "GET" && url.pathname === "/api/checkout") {
@@ -502,20 +660,7 @@ async function handleApi(req, res, url) {
 
   const checkoutPay = url.pathname.match(/^\/api\/checkout\/([^/]+)\/pay$/);
   if (method === "POST" && checkoutPay) {
-    const state = readState();
-    const order = state.orders.find((item) => item.id === checkoutPay[1]);
-    if (!order) return notFound(res);
-    const result = authorizeOrder(state, order);
-    if (result.order.paymentStatus === "Authorized") createLicenseFromOrder(state, result.order);
-    audit(state, result.order.paymentStatus === "Authorized" ? "checkout.payment_authorized" : "checkout.provider_pending", {
-      id: order.id,
-      orderNumber: order.orderNumber,
-      provider: order.provider,
-      apiKeyRef: order.apiKeyRef
-    });
-    writeState(state);
-    if (result.error) return json(res, result.statusCode, { error: result.error, checkout: result.order });
-    return json(res, result.statusCode, result.order);
+    return payBuyerOrder(req, res, checkoutPay[1]);
   }
 
   if (method === "POST" && url.pathname === "/api/dev/reset") {

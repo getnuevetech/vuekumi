@@ -48,6 +48,10 @@ For AWS, use the ECS Fargate + EFS deployment in [AWS_DEPLOYMENT.md](./AWS_DEPLO
 - Admin backend APIs enforce role permissions for overview, access, users, content, and activity sections.
 - Payment and SMS providers stay configurable by admin-managed API key references; live authorization waits for matching environment secrets.
 
+## Backend Direction
+
+The old platform backend has been replaced by the new `/api/v2/*` backend contract. The existing admin backend remains available at `/api/admin/*` only until a new admin backend is built. See [NEW_BACKEND_CONTRACT.md](./NEW_BACKEND_CONTRACT.md).
+
 ## Checks
 
 ```sh
