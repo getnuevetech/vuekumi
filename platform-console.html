@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VUEKUMI Platform Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;700&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="platform-console.css">
+  </head>
+  <body>
+    <nav class="console-nav">
+      <a class="brand" href="index.html">VUEKUMI</a>
+      <div class="nav-links">
+        <a href="index.html">Marketplace</a>
+        <a href="#onboarding">Contributor</a>
+        <a href="#admin">Admin</a>
+        <a href="#gateways">Gateways</a>
+      </div>
+      <button class="amber-button" id="saveConfig">Save Config</button>
+    </nav>
+
+    <main>
+      <section class="console-hero">
+        <div>
+          <p class="eyebrow">Platform Backend</p>
+          <h1>Admin Controls For VUEKUMI Operations</h1>
+          <p class="lead">The public homepage now uses the supplied Kimi structure. This console captures the operational requirements without changing that visual template.</p>
+        </div>
+        <div class="hero-image">
+          <img src="images/vuekumi-banner.png" alt="VUEKUMI editorial banner">
+        </div>
+      </section>
+
+      <section class="panel-grid" id="onboarding">
+        <article class="panel tall-panel">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">Contributor Onboarding</p>
+              <h2>Mobile OTP first</h2>
+            </div>
+            <span class="status-pill" id="otpStatus">OTP pending</span>
+          </div>
+
+          <div class="form-grid">
+            <label>
+              Mobile number
+              <input id="phoneInput" type="tel" placeholder="+234 800 000 0000">
+            </label>
+            <button class="dark-button" id="sendOtp">Send OTP</button>
+            <label>
+              OTP code
+              <input id="otpInput" inputmode="numeric" placeholder="246810">
+            </label>
+            <button class="amber-button" id="verifyOtp">Verify</button>
+          </div>
+
+          <div class="upload-meter">
+            <div>
+              <p class="eyebrow">Starter upload access</p>
+              <strong><span id="uploadCount">0</span>/<span id="uploadLimit">3</span> images</strong>
+            </div>
+            <button class="light-button" id="addUpload" disabled>Add Image</button>
+          </div>
+
+          <div class="step-list" id="verificationSteps"></div>
+        </article>
+
+        <article class="panel image-panel">
+          <img src="images/africa-model-1.jpg" alt="Verified African contributor">
+          <div>
+            <p class="eyebrow">Contributor Scope</p>
+            <h2>African contributors only</h2>
+            <p>End users can be global. Contributors are limited to approved African countries, controlled by admin policy.</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel" id="admin">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Admin Backend</p>
+            <h2>Configurable access variables</h2>
+          </div>
+          <button class="light-button" id="resetConfig">Reset Defaults</button>
+        </div>
+
+        <div class="form-grid four">
+          <label>
+            Free upload minimum
+            <input id="freeMin" type="number" min="1" max="10">
+          </label>
+          <label>
+            Free upload maximum
+            <input id="freeMax" type="number" min="1" max="10">
+          </label>
+          <label>
+            Active free upload limit
+            <input id="activeFreeLimit" type="number" min="1" max="10">
+          </label>
+          <label>
+            Contributor eligibility
+            <select id="contributorEligibility">
+              <option>Africa only</option>
+              <option>Admin approved African countries</option>
+            </select>
+          </label>
+          <label>
+            AI enhancement threshold
+            <input id="aiThreshold" type="range" min="40" max="95">
+          </label>
+          <label>
+            Face match confidence
+            <input id="faceConfidence" type="range" min="60" max="99">
+          </label>
+          <label>
+            Accepted government IDs
+            <input id="idTypes" type="text">
+          </label>
+          <label>
+            Agreement version
+            <input id="agreementVersion" type="text">
+          </label>
+        </div>
+
+        <div class="matrix-wrap">
+          <h3>Contributor posting permissions</h3>
+          <div class="permission-matrix" id="permissionMatrix"></div>
+        </div>
+      </section>
+
+      <section class="panel-grid" id="gateways">
+        <article class="panel">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">Payment Gateways</p>
+              <h2>Global charging and country payouts</h2>
+            </div>
+          </div>
+          <div class="gateway-table" id="gatewayTable"></div>
+        </article>
+
+        <article class="panel">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">Live Config Preview</p>
+              <h2>Stored as admin-managed variables</h2>
+            </div>
+          </div>
+          <pre class="config-preview" id="configPreview"></pre>
+        </article>
+      </section>
+    </main>
+
+    <script src="platform-console.js"></script>
+  </body>
+</html>

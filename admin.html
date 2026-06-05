@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VUEKUMI Admin Backend</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./admin.css">
+  </head>
+  <body>
+    <div class="admin-shell">
+      <aside class="admin-sidebar" aria-label="Admin navigation">
+        <a class="admin-brand" href="./admin.html">VUEKUMI</a>
+        <p>Admin Backend</p>
+        <nav class="admin-nav">
+          <button type="button" data-section="overview">Overview</button>
+          <button type="button" data-section="access">Access</button>
+          <button type="button" data-section="users">Users</button>
+          <button type="button" data-section="content">Content</button>
+          <button type="button" data-section="activity">Activity</button>
+        </nav>
+      </aside>
+
+      <main class="admin-main">
+        <header class="admin-topbar">
+          <div>
+            <span id="adminKicker">Admin Backend</span>
+            <h1 id="adminTitle">Access Management</h1>
+          </div>
+          <div class="topbar-actions">
+            <a href="./index.html">Public Site</a>
+            <button type="button" data-action="refresh">Refresh</button>
+            <button type="button" data-action="logout">Sign Out</button>
+          </div>
+        </header>
+
+        <section id="adminApp" class="admin-app" aria-live="polite">
+          <div class="empty-state">Loading admin backend...</div>
+        </section>
+      </main>
+    </div>
+
+    <div id="adminToast" class="admin-toast" role="status"></div>
+    <script defer src="./admin.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+.DS_Store
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Local runtime state
+.data/
+
+# Local verification screenshots
+admin-backend-access.png
+verification-checkout.png
+vuekumi-*-verified.png
+vuekumi-*-runtime.png
+admin-protected-access.png
+
+# Earlier local prototypes/raw duplicate exports
+legacy-prototype/
+raw-demo/
