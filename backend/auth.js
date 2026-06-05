@@ -10,6 +10,14 @@ const contributorTokenTtlMs = Number(process.env.CONTRIBUTOR_TOKEN_TTL_MS || 7 *
 const buyerTokenTtlMs = Number(process.env.BUYER_TOKEN_TTL_MS || 7 * 24 * 60 * 60 * 1000);
 const otpTtlMs = Number(process.env.OTP_TTL_MS || 10 * 60 * 1000);
 
+if (process.env.NODE_ENV === "production") {
+  const required = ["ADMIN_ACCESS_KEY", "ADMIN_TOKEN_SECRET", "CONTRIBUTOR_TOKEN_SECRET", "BUYER_TOKEN_SECRET"];
+  const missing = required.filter((key) => !process.env[key]);
+  if (missing.length) {
+    throw new Error(`Missing production secrets: ${missing.join(", ")}`);
+  }
+}
+
 function base64url(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }

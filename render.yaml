@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: vuekumi
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATA_DIR
+        value: /data
+      - key: ADMIN_ACCESS_KEY
+        sync: false
+      - key: ADMIN_TOKEN_SECRET
+        generateValue: true
+      - key: CONTRIBUTOR_TOKEN_SECRET
+        generateValue: true
+      - key: BUYER_TOKEN_SECRET
+        generateValue: true
+      - key: ADMIN_TOKEN_TTL_MS
+        value: "28800000"
+      - key: CONTRIBUTOR_TOKEN_TTL_MS
+        value: "604800000"
+      - key: BUYER_TOKEN_TTL_MS
+        value: "604800000"
+      - key: OTP_TTL_MS
+        value: "600000"
+    disks:
+      - name: vuekumi-data
+        mountPath: /data
+        sizeGB: 1

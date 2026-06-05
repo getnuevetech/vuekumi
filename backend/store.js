@@ -11,8 +11,8 @@ const {
 } = require("./defaults");
 
 const rootDir = path.resolve(__dirname, "..");
-const dataDir = path.join(rootDir, ".data");
-const stateFile = path.join(dataDir, "vuekumi-state.json");
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(rootDir, ".data");
+const stateFile = process.env.STATE_FILE ? path.resolve(process.env.STATE_FILE) : path.join(dataDir, "vuekumi-state.json");
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));

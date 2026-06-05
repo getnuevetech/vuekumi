@@ -1,0 +1,13 @@
+.git
+.data
+node_modules
+.env
+.env.*
+!.env.example
+admin-backend-access.png
+verification-checkout.png
+vuekumi-*-verified.png
+vuekumi-*-runtime.png
+admin-protected-access.png
+legacy-prototype
+raw-demo

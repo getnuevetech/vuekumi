@@ -28,8 +28,14 @@ ADMIN_TOKEN_SECRET=
 ADMIN_TOKEN_TTL_MS=28800000
 CONTRIBUTOR_TOKEN_SECRET=
 CONTRIBUTOR_TOKEN_TTL_MS=604800000
+BUYER_TOKEN_SECRET=
+BUYER_TOKEN_TTL_MS=604800000
 OTP_TTL_MS=600000
 ```
+
+## Deploy Online
+
+The frontend and backend deploy together as one Node web service. See [DEPLOYMENT.md](./DEPLOYMENT.md) for Render, Docker, and generic Node-host instructions.
 
 ## Platform Access Model
 
@@ -48,4 +54,4 @@ npm run check
 
 ## Notes
 
-Runtime state is stored locally in `.data/` and is intentionally excluded from git. Live provider credentials should be supplied through environment variables and never committed.
+Runtime state is stored in `DATA_DIR` and is intentionally excluded from git. Use a persistent disk for online deployments. Live provider credentials should be supplied through environment variables and never committed.
