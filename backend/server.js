@@ -11,6 +11,9 @@ const legacyCheckoutStatus = ["Checkout", "sim" + "ulated"].join(" ");
 const adminAccessKey = process.env.ADMIN_ACCESS_KEY || "VUEKUMI-ADMIN-LOCAL";
 const adminTokenSecret = process.env.ADMIN_TOKEN_SECRET || crypto.createHash("sha256").update(`vuekumi-admin:${adminAccessKey}`).digest("hex");
 const adminTokenTtlMs = Number(process.env.ADMIN_TOKEN_TTL_MS || 8 * 60 * 60 * 1000);
+const contributorTokenSecret = process.env.CONTRIBUTOR_TOKEN_SECRET || crypto.createHash("sha256").update(`vuekumi-contributor:${adminAccessKey}`).digest("hex");
+const contributorTokenTtlMs = Number(process.env.CONTRIBUTOR_TOKEN_TTL_MS || 7 * 24 * 60 * 60 * 1000);
+const otpTtlMs = Number(process.env.OTP_TTL_MS || 10 * 60 * 1000);
 
 const defaultConfig = {
   freeUploadMin: 3,
@@ -150,6 +153,7 @@ function defaultState() {
     selectedImage: null,
     marketplaceSearch: "",
     otpCodes: {},
+    contributorSessions: {},
     auditLog: []
   };
 }
@@ -174,6 +178,7 @@ function checkoutRecord(state, body = {}) {
   const plan = body.plan || body.buyerType || "Regular Individual";
   const gateway = body.gateway || state.config.subscriptionGateway;
   const provider = paymentProviderFor(state, gateway);
+  const providerCredentialsLoaded = Boolean(provider?.apiKeyRef && process.env[provider.apiKeyRef]);
   return {
     id: crypto.randomUUID(),
     orderNumber: orderNumber(),
@@ -182,6 +187,7 @@ function checkoutRecord(state, body = {}) {
     provider: provider?.name || gateway,
     apiKeyRef: provider?.apiKeyRef || "",
     gatewayConfigured: Boolean(provider?.enabled && provider?.apiKeyRef),
+    providerCredentialsLoaded,
     amount: body.amount ?? parsePlanAmount(state, plan),
     currency: body.currency || "USD",
     paymentStatus: "Pending",
@@ -195,6 +201,7 @@ function checkoutRecord(state, body = {}) {
 function normalizeCheckoutItem(state, item) {
   const provider = paymentProviderFor(state, item.gateway || state.config.subscriptionGateway);
   const status = item.status === legacyCheckoutStatus ? "Payment Pending" : item.status || "Payment Pending";
+  const providerCredentialsLoaded = Boolean(provider?.apiKeyRef && process.env[provider.apiKeyRef]);
   return {
     id: item.id || crypto.randomUUID(),
     orderNumber: item.orderNumber || orderNumber(),
@@ -203,6 +210,7 @@ function normalizeCheckoutItem(state, item) {
     provider: item.provider || provider?.name || state.config.subscriptionGateway,
     apiKeyRef: item.apiKeyRef || provider?.apiKeyRef || "",
     gatewayConfigured: item.gatewayConfigured ?? Boolean(provider?.enabled && provider?.apiKeyRef),
+    providerCredentialsLoaded: item.providerCredentialsLoaded ?? providerCredentialsLoaded,
     amount: item.amount ?? parsePlanAmount(state, item.plan || "Regular Individual"),
     currency: item.currency || "USD",
     paymentStatus: item.paymentStatus || (status.includes("Authorized") ? "Authorized" : "Pending"),
@@ -224,6 +232,7 @@ function normalizeRuntimeState(state) {
   state.adminAccess = state.adminAccess?.length ? state.adminAccess : clone(seedAdminAccess);
   state.platformActivities = state.platformActivities?.length ? state.platformActivities : clone(seedPlatformActivities);
   state.auditLog = state.auditLog || [];
+  state.contributorSessions = state.contributorSessions || {};
   return state;
 }
 
@@ -344,6 +353,61 @@ function requireAdmin(req, res) {
   return session;
 }
 
+function requireAdminPermission(req, res, permission) {
+  const permissions = req.adminSession?.permissions || [];
+  if (permissions.includes(permission) || permissions.includes("settings")) return true;
+  json(res, 403, { error: `${permission} permission required` });
+  return false;
+}
+
+function signContributorPayload(payload) {
+  return crypto.createHmac("sha256", contributorTokenSecret).update(payload).digest("base64url");
+}
+
+function issueContributorToken(state, user) {
+  const expiresAt = Date.now() + contributorTokenTtlMs;
+  const payload = base64url({
+    sub: user.id,
+    phone: user.phone,
+    category: user.category,
+    country: user.country,
+    expiresAt
+  });
+  const token = `${payload}.${signContributorPayload(payload)}`;
+  state.contributorSessions = state.contributorSessions || {};
+  state.contributorSessions[user.id] = { token, expiresAt, phone: user.phone, category: user.category };
+  return { token, expiresAt };
+}
+
+function verifyContributorToken(token, state = readState()) {
+  if (!token || !token.includes(".")) return null;
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature || signContributorPayload(payload) !== signature) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!session.expiresAt || Date.now() > Number(session.expiresAt)) return null;
+    const saved = state.contributorSessions?.[session.sub];
+    if (saved?.token && saved.token !== token) return null;
+    const user = state.users.find((item) => item.id === session.sub && item.accountGroup === "Contributor");
+    if (!user || !["Active", "Pending"].includes(user.status)) return null;
+    return { ...session, user };
+  } catch {
+    return null;
+  }
+}
+
+function requireContributor(req, res, state = readState()) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const session = verifyContributorToken(token, state);
+  if (!session) {
+    json(res, 401, { error: "Contributor phone verification required" });
+    return null;
+  }
+  req.contributorSession = session;
+  return session;
+}
+
 function allowedContributorCountries(state) {
   const countries = state.config.countryRules
     .filter((rule) => rule.contributorsAllowed)
@@ -358,8 +422,8 @@ function uploadStatus(state, upload) {
   return "Admin Review";
 }
 
-function profileComplete(state) {
-  const c = state.contributor;
+function profileComplete(state, contributor = state.contributor) {
+  const c = contributor;
   return Boolean(
     allowedContributorCountries(state).includes(c.country) &&
       c.email &&
@@ -372,6 +436,108 @@ function profileComplete(state) {
       c.contentAgreementSigned &&
       c.copyrightAgreementSigned
   );
+}
+
+function contributorCategory(state, contributorType) {
+  return state.userCategories.find((item) =>
+    item.group === "Contributor" &&
+    item.enabled &&
+    item.name === contributorType
+  );
+}
+
+function allowedCategoriesForContributor(state, contributorType) {
+  const category = contributorCategory(state, contributorType);
+  const configured = category?.allowedContentCategories?.length
+    ? category.allowedContentCategories
+    : state.config.contributorPermissions?.[contributorType];
+  return normalizeList(configured);
+}
+
+function activeStarterLimit(state) {
+  const min = Number(state.config.freeUploadMin || 3);
+  const max = Number(state.config.freeUploadMax || 5);
+  const active = Number(state.config.activeFreeLimit || min);
+  return Math.max(min, Math.min(max, active));
+}
+
+function accessLevelForContributor(state, contributor) {
+  return (state.config.contributorAccessLevels || []).find((level) => level.name === contributor.accessLevel) ||
+    state.config.contributorAccessLevels?.[0] ||
+    defaultConfig.contributorAccessLevels[0];
+}
+
+function contributorUploadCount(state, userId) {
+  return state.uploads.filter((item) => item.owner === userId).length;
+}
+
+function contributorCanUpload(state, user, contributor) {
+  const used = contributorUploadCount(state, user.id);
+  const starterLimit = activeStarterLimit(state);
+  if (used < starterLimit) return { ok: true, used, limit: starterLimit, mode: "starter" };
+  const level = accessLevelForContributor(state, contributor);
+  const paidLimit = Number(level.uploads || starterLimit);
+  if (contributor.subscriptionActive && profileComplete(state, contributor) && used < paidLimit) {
+    return { ok: true, used, limit: paidLimit, mode: "paid" };
+  }
+  return {
+    ok: false,
+    used,
+    limit: contributor.subscriptionActive ? paidLimit : starterLimit,
+    error: `Starter upload limit reached. Complete profile verification and activate a paid access level to upload more than ${starterLimit} images.`
+  };
+}
+
+function syncContributorUser(state, user, contributor) {
+  const allowedContentCategories = allowedCategoriesForContributor(state, contributor.type);
+  user.category = contributor.type;
+  user.country = contributor.country;
+  user.email = contributor.email || user.email;
+  user.allowedContentCategories = allowedContentCategories;
+  user.verificationStatus = profileComplete(state, contributor) ? "Verified" : "OTP Verified";
+  user.status = allowedContributorCountries(state).includes(contributor.country)
+    ? (profileComplete(state, contributor) ? "Active" : "Pending")
+    : "Blocked";
+  user.lastActivity = profileComplete(state, contributor) ? "Contributor profile verified" : "Contributor profile in progress";
+  return user;
+}
+
+function findOrCreateContributorUser(state, phone) {
+  const normalizedPhone = String(phone || "").trim();
+  let user = state.users.find((item) => item.accountGroup === "Contributor" && item.phone === normalizedPhone);
+  if (user) return user;
+  const contributor = state.contributor || defaultState().contributor;
+  user = normalizeManagedUser({
+    name: `Contributor ${normalizedPhone}`,
+    phone: normalizedPhone,
+    accountGroup: "Contributor",
+    category: contributor.type,
+    country: contributor.country,
+    status: "Pending",
+    verificationStatus: "OTP Verified",
+    allowedContentCategories: allowedCategoriesForContributor(state, contributor.type),
+    lastActivity: "Phone OTP verified"
+  });
+  state.users.unshift(user);
+  return user;
+}
+
+function publicState(state) {
+  const output = clone(state);
+  delete output.otpCodes;
+  delete output.contributorSessions;
+  delete output.adminAccess;
+  delete output.auditLog;
+  output.users = output.users.map((user) => ({
+    id: user.id,
+    accountGroup: user.accountGroup,
+    category: user.category,
+    country: user.country,
+    status: user.status,
+    verificationStatus: user.verificationStatus,
+    allowedContentCategories: user.allowedContentCategories
+  }));
+  return output;
 }
 
 function uniqueId(prefix) {
@@ -486,13 +652,11 @@ function handleApi(req, res, url) {
   }
 
   if (method === "GET" && url.pathname === "/api/state") {
-    const state = readState();
-    const publicState = { ...state };
-    delete publicState.otpCodes;
-    return json(res, 200, publicState);
+    return json(res, 200, publicState(readState()));
   }
 
   if ((method === "PUT" || method === "POST") && url.pathname === "/api/state") {
+    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "settings")) return;
     return readBody(req)
       .then((body) => {
         const incoming = { ...defaultState(), ...body };
@@ -509,6 +673,7 @@ function handleApi(req, res, url) {
   }
 
   if (method === "PUT" && url.pathname === "/api/config") {
+    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "settings")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -557,10 +722,12 @@ function handleApi(req, res, url) {
   if (url.pathname.startsWith("/api/admin/") && !requireAdmin(req, res)) return;
 
   if (method === "GET" && url.pathname === "/api/admin/overview") {
+    if (!requireAdminPermission(req, res, "overview")) return;
     return json(res, 200, publicAdminState(readState()));
   }
 
   if (method === "GET" && url.pathname === "/api/admin/access") {
+    if (!requireAdminPermission(req, res, "access")) return;
     const state = readState();
     return json(res, 200, {
       adminAccess: state.adminAccess,
@@ -572,6 +739,7 @@ function handleApi(req, res, url) {
   }
 
   if (method === "PUT" && url.pathname === "/api/admin/access") {
+    if (!requireAdminPermission(req, res, "access")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -599,10 +767,12 @@ function handleApi(req, res, url) {
   }
 
   if (method === "GET" && url.pathname === "/api/admin/users") {
+    if (!requireAdminPermission(req, res, "users")) return;
     return json(res, 200, readState().users);
   }
 
   if (method === "POST" && url.pathname === "/api/admin/users") {
+    if (!requireAdminPermission(req, res, "users")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -617,6 +787,7 @@ function handleApi(req, res, url) {
 
   const adminUserRoute = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
   if (method === "PATCH" && adminUserRoute) {
+    if (!requireAdminPermission(req, res, "users")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -631,11 +802,13 @@ function handleApi(req, res, url) {
   }
 
   if (method === "GET" && url.pathname === "/api/admin/content") {
+    if (!requireAdminPermission(req, res, "content")) return;
     const state = readState();
     return json(res, 200, state.uploads.map((item) => normalizeContentItem(state, item)));
   }
 
   if (method === "POST" && url.pathname === "/api/admin/content") {
+    if (!requireAdminPermission(req, res, "content")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -650,6 +823,7 @@ function handleApi(req, res, url) {
 
   const adminContentRoute = url.pathname.match(/^\/api\/admin\/content\/([^/]+)$/);
   if (method === "PATCH" && adminContentRoute) {
+    if (!requireAdminPermission(req, res, "content")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -664,6 +838,7 @@ function handleApi(req, res, url) {
   }
 
   if (method === "GET" && url.pathname === "/api/admin/activity") {
+    if (!requireAdminPermission(req, res, "activity")) return;
     const state = readState();
     return json(res, 200, adminActivity(state));
   }
@@ -673,14 +848,16 @@ function handleApi(req, res, url) {
       .then((body) => {
         if (!body.phone) return json(res, 400, { error: "phone is required" });
         const state = readState();
-        const code = "246810";
+        const code = String(crypto.randomInt(100000, 1000000));
         state.otpCodes = state.otpCodes || {};
         state.otpCodes[body.phone] = { code, createdAt: new Date().toISOString() };
         state.session.phone = body.phone;
         state.session.otpSent = true;
         audit(state, "otp.sent", { phone: body.phone, provider: "configured-sms-provider" });
         saveState(state);
-        json(res, 200, { ok: true, phone: body.phone, otpPreview: code });
+        const response = { ok: true, phone: body.phone };
+        if (process.env.NODE_ENV !== "production") response.otpPreview = code;
+        json(res, 200, response);
       })
       .catch((error) => json(res, 400, { error: error.message }));
   }
@@ -690,13 +867,29 @@ function handleApi(req, res, url) {
       .then((body) => {
         const state = readState();
         const record = state.otpCodes?.[body.phone];
-        const verified = Boolean(record && body.otp === record.code);
+        const expired = record?.createdAt && Date.now() - new Date(record.createdAt).getTime() > otpTtlMs;
+        const verified = Boolean(record && !expired && body.otp === record.code);
         state.session.phone = body.phone || state.session.phone;
         state.session.otpSent = true;
         state.session.otpVerified = verified;
+        let contributorAuth = null;
+        let user = null;
+        if (verified) {
+          user = findOrCreateContributorUser(state, body.phone);
+          user.verificationStatus = "OTP Verified";
+          user.lastActivity = "Phone OTP verified";
+          contributorAuth = issueContributorToken(state, user);
+          delete state.otpCodes[body.phone];
+        }
         audit(state, verified ? "otp.verified" : "otp.failed", { phone: body.phone });
         saveState(state);
-        json(res, verified ? 200 : 401, { ok: verified, verified });
+        json(res, verified ? 200 : 401, {
+          ok: verified,
+          verified,
+          token: contributorAuth?.token,
+          expiresAt: contributorAuth?.expiresAt,
+          user
+        });
       })
       .catch((error) => json(res, 400, { error: error.message }));
   }
@@ -705,8 +898,15 @@ function handleApi(req, res, url) {
     return readBody(req)
       .then((body) => {
         const state = readState();
-        state.contributor = { ...state.contributor, ...(body.contributor || body) };
-        audit(state, "contributor.updated", { country: state.contributor.country, type: state.contributor.type });
+        const session = requireContributor(req, res, state);
+        if (!session) return;
+        const nextContributor = { ...state.contributor, ...(body.contributor || body) };
+        if (!allowedContributorCountries(state).includes(nextContributor.country)) {
+          return json(res, 403, { error: "VUEKUMI currently accepts contributors only from admin-approved African countries." });
+        }
+        state.contributor = nextContributor;
+        syncContributorUser(state, session.user, state.contributor);
+        audit(state, "contributor.updated", { userId: session.user.id, country: state.contributor.country, type: state.contributor.type });
         saveState(state);
         json(res, 200, { contributor: state.contributor, profileComplete: profileComplete(state) });
       })
@@ -715,9 +915,12 @@ function handleApi(req, res, url) {
 
   if (method === "POST" && url.pathname === "/api/contributor/face-match") {
     const state = readState();
+    const session = requireContributor(req, res, state);
+    if (!session) return;
     state.contributor.faceScan = true;
     state.contributor.faceScanScore = Math.max(Number(state.contributor.faceScanScore || 0), Number(state.config.faceConfidence));
-    audit(state, "face.match.verified", { score: state.contributor.faceScanScore });
+    syncContributorUser(state, session.user, state.contributor);
+    audit(state, "face.match.verified", { userId: session.user.id, score: state.contributor.faceScanScore });
     saveState(state);
     return json(res, 200, { contributor: state.contributor, profileComplete: profileComplete(state) });
   }
@@ -726,9 +929,18 @@ function handleApi(req, res, url) {
     return readBody(req)
       .then((body) => {
         const state = readState();
+        const session = requireContributor(req, res, state);
+        if (!session) return;
+        const level = (state.config.contributorAccessLevels || []).find((item) => item.name === (body.accessLevel || state.contributor.accessLevel));
+        if (!level) return json(res, 400, { error: "Unknown contributor access level" });
+        if (level.requiresVerification && !profileComplete(state)) {
+          return json(res, 403, { error: "Complete profile, face, ID, and agreement verification before activating this access level." });
+        }
         state.contributor.accessLevel = body.accessLevel || state.contributor.accessLevel;
         state.contributor.subscriptionActive = true;
+        syncContributorUser(state, session.user, state.contributor);
         audit(state, "contributor.subscription.activated", {
+          userId: session.user.id,
           accessLevel: state.contributor.accessLevel,
           gateway: state.config.subscriptionGateway
         });
@@ -746,13 +958,27 @@ function handleApi(req, res, url) {
     return readBody(req)
       .then((body) => {
         const state = readState();
+        const session = requireContributor(req, res, state);
+        if (!session) return;
+        const contributor = state.contributor;
+        if (!allowedContributorCountries(state).includes(body.country || contributor.country)) {
+          return json(res, 403, { error: "Contributors must be from an admin-approved African country." });
+        }
+        const contributorType = body.contributorType || contributor.type;
+        const allowedCategories = allowedCategoriesForContributor(state, contributorType);
+        const category = body.category || "Photo Content";
+        if (!allowedCategories.includes(category)) {
+          return json(res, 403, { error: `${contributorType} contributors cannot post ${category}. Admin can update this access matrix.` });
+        }
+        const uploadAccess = contributorCanUpload(state, session.user, contributor);
+        if (!uploadAccess.ok) return json(res, 402, { error: uploadAccess.error, uploadAccess });
         const upload = {
           id: crypto.randomUUID(),
-          owner: body.owner || "current",
+          owner: session.user.id,
           title: body.title || "Untitled VUEKUMI Upload",
-          category: body.category || "Photo Content",
-          contributorType: body.contributorType || state.contributor.type,
-          country: body.country || state.contributor.country,
+          category,
+          contributorType,
+          country: body.country || contributor.country,
           quality: Number(body.quality || 70),
           faces: Boolean(body.faces),
           release: Boolean(body.release),
@@ -762,15 +988,17 @@ function handleApi(req, res, url) {
         };
         upload.status = uploadStatus(state, upload);
         state.uploads.unshift(upload);
-        audit(state, "upload.created", { id: upload.id, status: upload.status });
+        syncContributorUser(state, session.user, contributor);
+        audit(state, "upload.created", { id: upload.id, userId: session.user.id, status: upload.status });
         saveState(state);
-        json(res, 201, upload);
+        json(res, 201, { ...upload, uploadAccess: contributorCanUpload(state, session.user, contributor) });
       })
       .catch((error) => json(res, 400, { error: error.message }));
   }
 
   const uploadModeration = url.pathname.match(/^\/api\/uploads\/([^/]+)\/moderate$/);
   if (method === "PATCH" && uploadModeration) {
+    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "content")) return;
     return readBody(req)
       .then((body) => {
         const state = readState();
@@ -787,6 +1015,7 @@ function handleApi(req, res, url) {
 
   const uploadEnhance = url.pathname.match(/^\/api\/uploads\/([^/]+)\/enhance$/);
   if (method === "POST" && uploadEnhance) {
+    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "content")) return;
     const state = readState();
     const upload = state.uploads.find((item) => item.id === uploadEnhance[1]);
     if (!upload) return notFound(res);
@@ -837,6 +1066,19 @@ function handleApi(req, res, url) {
     item.provider = provider.name;
     item.apiKeyRef = provider.apiKeyRef;
     item.gatewayConfigured = true;
+    item.providerCredentialsLoaded = Boolean(process.env[provider.apiKeyRef]);
+    if (!item.providerCredentialsLoaded) {
+      item.paymentStatus = "Pending Provider Credentials";
+      item.status = "Provider Credentials Required";
+      audit(state, "checkout.provider_credentials_required", {
+        id: item.id,
+        orderNumber: item.orderNumber,
+        provider: provider.name,
+        apiKeyRef: provider.apiKeyRef
+      });
+      saveState(state);
+      return json(res, 202, item);
+    }
     item.paymentStatus = "Authorized";
     item.status = "Payment Authorized";
     item.authorizationRef = `AUTH-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
@@ -852,6 +1094,8 @@ function handleApi(req, res, url) {
   }
 
   if (method === "POST" && url.pathname === "/api/dev/reset") {
+    if (process.env.NODE_ENV === "production") return notFound(res);
+    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "settings")) return;
     const state = defaultState();
     audit(state, "dev.reset");
     saveState(state);

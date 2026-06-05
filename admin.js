@@ -11,6 +11,13 @@
     content: ["Content Management", "Images And Approval Queue"],
     activity: ["Platform Activity", "Audit And Operations"]
   };
+  const sectionPermissions = {
+    overview: "overview",
+    access: "access",
+    users: "users",
+    content: "content",
+    activity: "activity"
+  };
 
   const statuses = ["Active", "Pending", "Suspended", "Blocked"];
   const verificationStatuses = ["Not Started", "OTP Verified", "Needs ID Review", "Procurement Review", "Verified", "Rejected"];
@@ -94,13 +101,14 @@
 
   async function loadAll() {
     try {
-      const [overview, access, users, content, activity] = await Promise.all([
-        api("/api/admin/overview"),
-        api("/api/admin/access"),
-        api("/api/admin/users"),
-        api("/api/admin/content"),
-        api("/api/admin/activity")
+      const requests = await Promise.all([
+        canSection("overview") ? api("/api/admin/overview") : Promise.resolve(state.overview),
+        canSection("access") ? api("/api/admin/access") : Promise.resolve(state.access),
+        canSection("users") ? api("/api/admin/users") : Promise.resolve(state.users),
+        canSection("content") ? api("/api/admin/content") : Promise.resolve(state.content),
+        canSection("activity") ? api("/api/admin/activity") : Promise.resolve(state.activity)
       ]);
+      const [overview, access, users, content, activity] = requests;
       state = { overview, access, users, content, activity };
     } catch (error) {
       if (!adminSession) return;
@@ -152,13 +160,29 @@
   }
 
   function setSection(section) {
-    activeSection = sections[section] ? section : "access";
+    activeSection = sections[section] && canSection(section) ? section : firstAllowedSection();
     localStorage.setItem("vuekumiAdminSection", activeSection);
     render();
   }
 
+  function can(permission) {
+    const permissions = adminSession?.user?.permissions || adminSession?.permissions || [];
+    return permissions.includes(permission) || permissions.includes("settings");
+  }
+
+  function canSection(section) {
+    return Boolean(adminSession && can(sectionPermissions[section]));
+  }
+
+  function firstAllowedSection() {
+    return Object.keys(sections).find((section) => canSection(section)) || "overview";
+  }
+
   function renderNav() {
     document.querySelectorAll("[data-section]").forEach((button) => {
+      const allowed = canSection(button.dataset.section);
+      button.hidden = Boolean(adminSession) && !allowed;
+      button.disabled = Boolean(adminSession) && !allowed;
       button.classList.toggle("active", button.dataset.section === activeSection);
     });
   }
@@ -169,6 +193,7 @@
       return;
     }
     document.body.classList.remove("admin-locked");
+    if (!canSection(activeSection)) activeSection = firstAllowedSection();
     renderNav();
     const [nextKicker, nextTitle] = sections[activeSection] || sections.access;
     kicker.textContent = nextKicker;
