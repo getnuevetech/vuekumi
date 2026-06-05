@@ -1,270 +1,28 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
+const { rootDir, readState, writeState, audit, normalizeConfig, normalizeRole, normalizeUserCategory, normalizeUser, normalizeAsset, uniqueId } = require("./store");
+const { adminAccessKey, adminTokenTtlMs, contributorTokenTtlMs, otpTtlMs, issueToken, verifyToken, bearerToken, randomOtp } = require("./auth");
+const {
+  allowedContributorCountries,
+  allowedCategoriesForContributor,
+  profileComplete,
+  syncUserFromContributor,
+  findContributorProfile,
+  findOrCreateContributorByPhone,
+  createAssetForContributor,
+  uploadStatus,
+  createOrder,
+  authorizeOrder,
+  createLicenseFromOrder,
+  integrationMatrix,
+  publicState,
+  adminOverview,
+  adminActivity,
+  permissionList
+} = require("./platform");
 
-const rootDir = path.resolve(__dirname, "..");
-const dataDir = path.join(rootDir, ".data");
-const stateFile = path.join(dataDir, "vuekumi-state.json");
 const port = Number(process.env.PORT || 4180);
-const legacyCheckoutStatus = ["Checkout", "sim" + "ulated"].join(" ");
-const adminAccessKey = process.env.ADMIN_ACCESS_KEY || "VUEKUMI-ADMIN-LOCAL";
-const adminTokenSecret = process.env.ADMIN_TOKEN_SECRET || crypto.createHash("sha256").update(`vuekumi-admin:${adminAccessKey}`).digest("hex");
-const adminTokenTtlMs = Number(process.env.ADMIN_TOKEN_TTL_MS || 8 * 60 * 60 * 1000);
-const contributorTokenSecret = process.env.CONTRIBUTOR_TOKEN_SECRET || crypto.createHash("sha256").update(`vuekumi-contributor:${adminAccessKey}`).digest("hex");
-const contributorTokenTtlMs = Number(process.env.CONTRIBUTOR_TOKEN_TTL_MS || 7 * 24 * 60 * 60 * 1000);
-const otpTtlMs = Number(process.env.OTP_TTL_MS || 10 * 60 * 1000);
-
-const defaultConfig = {
-  freeUploadMin: 3,
-  freeUploadMax: 5,
-  activeFreeLimit: 3,
-  photoCategories: ["Photo Content", "Models", "Photography", "Street", "Culture"],
-  contributorTypes: ["Photo Content", "Models", "Photographers"],
-  userTypes: ["Regular Individual", "Agency", "Corporate"],
-  contributorEligibility: "Africa only",
-  aiQualityThreshold: 72,
-  faceConfidence: 88,
-  idTypes: "DL, International Passport, High-rated Government ID",
-  agreementVersion: "VUEKUMI Contributor Agreement v1.0",
-  licenseMode: "Rights managed and royalty free",
-  payoutCadence: "Monthly",
-  subscriptionGateway: "Stripe global",
-  contributorPermissions: {
-    "Photo Content": ["Photo Content", "Street", "Culture"],
-    Models: ["Models", "Photography"],
-    Photographers: ["Photo Content", "Models", "Photography", "Street", "Culture"]
-  },
-  gateways: [
-    { country: "Nigeria", subscription: "Stripe global", payout: "Paystack Transfer", sms: "Termii", keyRef: "NG_PAYSTACK_SECRET", enabled: true },
-    { country: "Ghana", subscription: "Stripe global", payout: "Flutterwave Ghana", sms: "Hubtel", keyRef: "GH_FLW_SECRET", enabled: true },
-    { country: "Kenya", subscription: "Stripe global", payout: "M-Pesa Daraja", sms: "Africa's Talking", keyRef: "KE_MPESA_SECRET", enabled: true },
-    { country: "South Africa", subscription: "Stripe global", payout: "Ozow", sms: "Clickatell", keyRef: "ZA_OZOW_SECRET", enabled: true },
-    { country: "Rwanda", subscription: "Stripe global", payout: "Flutterwave Rwanda", sms: "Africa's Talking", keyRef: "RW_FLW_SECRET", enabled: true }
-  ],
-  plans: [
-    { type: "Regular Individual", price: "$19", seats: 1, downloads: 25, license: "Standard royalty free" },
-    { type: "Agency", price: "$149", seats: 8, downloads: 300, license: "Extended campaign use" },
-    { type: "Corporate", price: "Custom", seats: 50, downloads: 1500, license: "Rights managed procurement" }
-  ],
-  agreements: {
-    contributor: true,
-    copyright: true,
-    modelRelease: true,
-    payoutTerms: true
-  },
-  contributorAccessLevels: [
-    { name: "Starter", price: "$0", uploads: 3, requiresVerification: false, description: "OTP verified contributors can upload the first starter images." },
-    { name: "Verified", price: "$29", uploads: 50, requiresVerification: true, description: "Deeper profile, face, ID, and agreement verification required." },
-    { name: "Professional", price: "$79", uploads: 250, requiresVerification: true, description: "Higher volume access for active contributors and agencies." }
-  ],
-  countryRules: [
-    { country: "Nigeria", contributorsAllowed: true, acceptedIds: "DL, International Passport, NIN-backed Government ID", smsProvider: "Termii", payoutCurrency: "NGN" },
-    { country: "Ghana", contributorsAllowed: true, acceptedIds: "DL, International Passport, Ghana Card", smsProvider: "Hubtel", payoutCurrency: "GHS" },
-    { country: "Kenya", contributorsAllowed: true, acceptedIds: "DL, International Passport, National ID", smsProvider: "Africa's Talking", payoutCurrency: "KES" },
-    { country: "South Africa", contributorsAllowed: true, acceptedIds: "DL, International Passport, National ID", smsProvider: "Clickatell", payoutCurrency: "ZAR" },
-    { country: "Rwanda", contributorsAllowed: true, acceptedIds: "DL, International Passport, National ID", smsProvider: "Africa's Talking", payoutCurrency: "RWF" }
-  ],
-  paymentProviders: [
-    { name: "Stripe", purpose: "Global subscription charging", apiKeyRef: "STRIPE_SECRET_KEY", enabled: true },
-    { name: "Paystack", purpose: "West Africa charging and payouts", apiKeyRef: "PAYSTACK_SECRET_KEY", enabled: true },
-    { name: "Flutterwave", purpose: "Pan-African charging and payouts", apiKeyRef: "FLUTTERWAVE_SECRET_KEY", enabled: true }
-  ],
-  smsProviders: [
-    { country: "Nigeria", provider: "Termii", apiKeyRef: "TERMII_API_KEY", senderId: "VUEKUMI", enabled: true },
-    { country: "Ghana", provider: "Hubtel", apiKeyRef: "HUBTEL_API_KEY", senderId: "VUEKUMI", enabled: true },
-    { country: "Kenya", provider: "Africa's Talking", apiKeyRef: "AFRICASTALKING_API_KEY", senderId: "VUEKUMI", enabled: true }
-  ]
-};
-
-const seedUploads = [
-  { id: "seed-1", title: "Braided Beauty", category: "Models", contributorType: "Models", country: "Nigeria", quality: 86, faces: true, release: true, copyrightApproval: true, status: "Approved", src: "images/africa-model-3.jpg" },
-  { id: "seed-2", title: "Falls Sunset", category: "Photography", contributorType: "Photographers", country: "Zambia", quality: 92, faces: false, release: false, copyrightApproval: true, status: "Approved", src: "images/africa-landscape-1.jpg" },
-  { id: "seed-3", title: "Nairobi Workspace", category: "Photo Content", contributorType: "Photo Content", country: "Kenya", quality: 61, faces: true, release: false, copyrightApproval: false, status: "Release Review", src: "images/africa-content-1.jpg" }
-];
-
-const defaultAdminPermissions = ["overview", "access", "users", "content", "activity", "settings"];
-
-const seedAdminAccess = [
-  { id: "role-super-admin", name: "Super Admin", description: "Full platform control.", permissions: defaultAdminPermissions, enabled: true },
-  { id: "role-user-manager", name: "User Manager", description: "Manage user accounts, user categories, and account status.", permissions: ["overview", "access", "users", "activity"], enabled: true },
-  { id: "role-content-manager", name: "Content Manager", description: "Manage content, categories, approval status, and moderation notes.", permissions: ["overview", "content", "activity"], enabled: true },
-  { id: "role-verification-manager", name: "Verification Manager", description: "Manage contributor verification, identity review, and copyright approval queues.", permissions: ["overview", "users", "content", "activity"], enabled: true }
-];
-
-const seedUserCategories = [
-  { id: "category-admin", group: "Admin", name: "Admin", description: "Administrative users for platform operations.", enabled: true, requiresVerification: true, allowedContentCategories: [] },
-  { id: "category-photo-content", group: "Contributor", name: "Photo Content", description: "African contributors submitting lifestyle, editorial, street, and culture content.", enabled: true, requiresVerification: true, allowedContentCategories: ["Photo Content", "Street", "Culture"] },
-  { id: "category-models", group: "Contributor", name: "Models", description: "African model contributors with image, likeness, and release verification.", enabled: true, requiresVerification: true, allowedContentCategories: ["Models", "Photography"] },
-  { id: "category-photographers", group: "Contributor", name: "Photographers", description: "African photographers allowed to submit across configured photo categories.", enabled: true, requiresVerification: true, allowedContentCategories: ["Photo Content", "Models", "Photography", "Street", "Culture"] },
-  { id: "category-regular-individual", group: "Enduser", name: "Regular Individual", description: "Individual buyers licensing images for personal or creator use.", enabled: true, requiresVerification: false, allowedContentCategories: [] },
-  { id: "category-agency", group: "Enduser", name: "Agency", description: "Agency buyers with team and client licensing needs.", enabled: true, requiresVerification: false, allowedContentCategories: [] },
-  { id: "category-corporate", group: "Enduser", name: "Corporate", description: "Corporate buyers with procurement, rights management, and invoice workflows.", enabled: true, requiresVerification: false, allowedContentCategories: [] }
-];
-
-const seedUsers = [
-  { id: "user-admin-1", name: "VUEKUMI Admin", phone: "+10000000001", email: "admin@vuekumi.local", accountGroup: "Admin", category: "Admin", country: "Global", status: "Active", verificationStatus: "Verified", adminRole: "Super Admin", allowedContentCategories: [], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Admin portal ready" },
-  { id: "user-photo-content-1", name: "Photo Content Contributor", phone: "+2348000000101", email: "photo.content@vuekumi.local", accountGroup: "Contributor", category: "Photo Content", country: "Nigeria", status: "Pending", verificationStatus: "OTP Verified", adminRole: "", allowedContentCategories: ["Photo Content", "Street", "Culture"], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Starter upload access" },
-  { id: "user-models-1", name: "Model Contributor", phone: "+2348000000102", email: "model@vuekumi.local", accountGroup: "Contributor", category: "Models", country: "Nigeria", status: "Pending", verificationStatus: "Needs ID Review", adminRole: "", allowedContentCategories: ["Models", "Photography"], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Awaiting face and ID review" },
-  { id: "user-photographers-1", name: "Photographer Contributor", phone: "+254700000103", email: "photographer@vuekumi.local", accountGroup: "Contributor", category: "Photographers", country: "Kenya", status: "Active", verificationStatus: "Verified", adminRole: "", allowedContentCategories: ["Photo Content", "Models", "Photography", "Street", "Culture"], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Content submitted" },
-  { id: "user-regular-1", name: "Regular Buyer", phone: "+12025550101", email: "regular@buyer.local", accountGroup: "Enduser", category: "Regular Individual", country: "United States", status: "Active", verificationStatus: "Email Pending", adminRole: "", allowedContentCategories: [], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Buyer account created" },
-  { id: "user-agency-1", name: "Agency Buyer", phone: "+12025550102", email: "agency@buyer.local", accountGroup: "Enduser", category: "Agency", country: "United Kingdom", status: "Active", verificationStatus: "Verified", adminRole: "", allowedContentCategories: [], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Agency profile created" },
-  { id: "user-corporate-1", name: "Corporate Buyer", phone: "+12025550103", email: "corporate@buyer.local", accountGroup: "Enduser", category: "Corporate", country: "South Africa", status: "Pending", verificationStatus: "Procurement Review", adminRole: "", allowedContentCategories: [], createdAt: "2026-05-28T00:00:00.000Z", lastActivity: "Corporate account awaiting review" }
-];
-
-const seedPlatformActivities = [
-  { id: "activity-admin-ready", type: "Admin", title: "Admin backend initialized", details: "Access, users, content, and activity management are available.", createdAt: "2026-05-28T00:00:00.000Z" },
-  { id: "activity-content-queue", type: "Content", title: "Content queue seeded", details: "Initial VUEKUMI content items are ready for admin moderation.", createdAt: "2026-05-28T00:00:00.000Z" },
-  { id: "activity-access-rules", type: "Access", title: "User category rules seeded", details: "Admin, contributor, and enduser categories are configurable from admin.", createdAt: "2026-05-28T00:00:00.000Z" }
-];
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function defaultState() {
-  return {
-    config: clone(defaultConfig),
-    session: { role: "guest", userType: "", phone: "", otpSent: false, otpVerified: false },
-    contributor: {
-      type: "Photographers",
-      country: "Nigeria",
-      accessLevel: "Starter",
-      idType: "International Passport",
-      idReference: "",
-      email: "",
-      address: "",
-      profilePhoto: false,
-      governmentId: false,
-      faceScan: false,
-      faceScanScore: 0,
-      agreementsSigned: false,
-      contentAgreementSigned: false,
-      copyrightAgreementSigned: false,
-      subscriptionActive: false
-    },
-    uploads: clone(seedUploads),
-    cart: [],
-    moderationNotes: [],
-    users: clone(seedUsers),
-    userCategories: clone(seedUserCategories),
-    adminAccess: clone(seedAdminAccess),
-    platformActivities: clone(seedPlatformActivities),
-    selectedImage: null,
-    marketplaceSearch: "",
-    otpCodes: {},
-    contributorSessions: {},
-    auditLog: []
-  };
-}
-
-function parsePlanAmount(state, planName) {
-  const plan = (state.config.plans || []).find((item) => item.type === planName);
-  const numeric = String(plan?.price || "").replace(/[^0-9.]/g, "");
-  return numeric ? Number(numeric) : 0;
-}
-
-function paymentProviderFor(state, gatewayName) {
-  const gateway = String(gatewayName || "").toLowerCase();
-  return (state.config.paymentProviders || []).find((provider) => gateway.includes(String(provider.name || "").toLowerCase())) ||
-    (state.config.paymentProviders || []).find((provider) => provider.enabled);
-}
-
-function orderNumber() {
-  return `VK-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
-}
-
-function checkoutRecord(state, body = {}) {
-  const plan = body.plan || body.buyerType || "Regular Individual";
-  const gateway = body.gateway || state.config.subscriptionGateway;
-  const provider = paymentProviderFor(state, gateway);
-  const providerCredentialsLoaded = Boolean(provider?.apiKeyRef && process.env[provider.apiKeyRef]);
-  return {
-    id: crypto.randomUUID(),
-    orderNumber: orderNumber(),
-    plan,
-    gateway,
-    provider: provider?.name || gateway,
-    apiKeyRef: provider?.apiKeyRef || "",
-    gatewayConfigured: Boolean(provider?.enabled && provider?.apiKeyRef),
-    providerCredentialsLoaded,
-    amount: body.amount ?? parsePlanAmount(state, plan),
-    currency: body.currency || "USD",
-    paymentStatus: "Pending",
-    status: "Payment Pending",
-    created: new Date().toLocaleString(),
-    createdAt: new Date().toISOString(),
-    buyerCountry: body.buyerCountry || "Global"
-  };
-}
-
-function normalizeCheckoutItem(state, item) {
-  const provider = paymentProviderFor(state, item.gateway || state.config.subscriptionGateway);
-  const status = item.status === legacyCheckoutStatus ? "Payment Pending" : item.status || "Payment Pending";
-  const providerCredentialsLoaded = Boolean(provider?.apiKeyRef && process.env[provider.apiKeyRef]);
-  return {
-    id: item.id || crypto.randomUUID(),
-    orderNumber: item.orderNumber || orderNumber(),
-    plan: item.plan || "Regular Individual",
-    gateway: item.gateway || state.config.subscriptionGateway,
-    provider: item.provider || provider?.name || state.config.subscriptionGateway,
-    apiKeyRef: item.apiKeyRef || provider?.apiKeyRef || "",
-    gatewayConfigured: item.gatewayConfigured ?? Boolean(provider?.enabled && provider?.apiKeyRef),
-    providerCredentialsLoaded: item.providerCredentialsLoaded ?? providerCredentialsLoaded,
-    amount: item.amount ?? parsePlanAmount(state, item.plan || "Regular Individual"),
-    currency: item.currency || "USD",
-    paymentStatus: item.paymentStatus || (status.includes("Authorized") ? "Authorized" : "Pending"),
-    status,
-    created: item.created || new Date().toLocaleString(),
-    createdAt: item.createdAt || new Date().toISOString(),
-    buyerCountry: item.buyerCountry || "Global",
-    authorizationRef: item.authorizationRef || "",
-    authorizedAt: item.authorizedAt || ""
-  };
-}
-
-function normalizeRuntimeState(state) {
-  state.config = { ...clone(defaultConfig), ...(state.config || {}) };
-  state.cart = (state.cart || []).map((item) => normalizeCheckoutItem(state, item));
-  state.uploads = state.uploads || clone(seedUploads);
-  state.users = state.users?.length ? state.users : clone(seedUsers);
-  state.userCategories = state.userCategories?.length ? state.userCategories : clone(seedUserCategories);
-  state.adminAccess = state.adminAccess?.length ? state.adminAccess : clone(seedAdminAccess);
-  state.platformActivities = state.platformActivities?.length ? state.platformActivities : clone(seedPlatformActivities);
-  state.auditLog = state.auditLog || [];
-  state.contributorSessions = state.contributorSessions || {};
-  return state;
-}
-
-function ensureDataStore() {
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  if (!fs.existsSync(stateFile)) saveState(defaultState());
-}
-
-function readState() {
-  ensureDataStore();
-  try {
-    return normalizeRuntimeState({ ...defaultState(), ...JSON.parse(fs.readFileSync(stateFile, "utf8")) });
-  } catch {
-    return normalizeRuntimeState(defaultState());
-  }
-}
-
-function saveState(state) {
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-}
-
-function audit(state, action, details = {}) {
-  state.auditLog = state.auditLog || [];
-  state.auditLog.unshift({
-    id: crypto.randomUUID(),
-    action,
-    details,
-    createdAt: new Date().toISOString()
-  });
-  state.auditLog = state.auditLog.slice(0, 300);
-}
 
 function json(res, status, payload) {
   res.writeHead(status, {
@@ -278,7 +36,7 @@ function notFound(res) {
   json(res, 404, { error: "Not found" });
 }
 
-function forbidden(res, message = "Admin access required") {
+function forbidden(res, message = "Access denied") {
   json(res, 401, { error: message });
 }
 
@@ -304,53 +62,20 @@ function readBody(req) {
   });
 }
 
-function base64url(value) {
-  return Buffer.from(JSON.stringify(value)).toString("base64url");
-}
-
-function signAdminPayload(payload) {
-  return crypto.createHmac("sha256", adminTokenSecret).update(payload).digest("base64url");
-}
-
-function issueAdminToken(user, role) {
-  const expiresAt = Date.now() + adminTokenTtlMs;
-  const payload = base64url({
-    sub: user.id,
-    name: user.name,
-    email: user.email,
-    role: role?.name || user.adminRole || "Admin",
-    permissions: role?.permissions || defaultAdminPermissions,
-    expiresAt
-  });
-  return {
-    token: `${payload}.${signAdminPayload(payload)}`,
-    expiresAt
-  };
-}
-
-function verifyAdminToken(token) {
-  if (!token || !token.includes(".")) return null;
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature || signAdminPayload(payload) !== signature) return null;
-  try {
-    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!session.expiresAt || Date.now() > Number(session.expiresAt)) return null;
-    return session;
-  } catch {
+function requireAdmin(req, res, state = readState()) {
+  const claims = verifyToken("admin", bearerToken(req));
+  if (!claims) {
+    forbidden(res, "Admin access required");
     return null;
   }
-}
-
-function requireAdmin(req, res) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  const session = verifyAdminToken(token);
-  if (!session) {
-    forbidden(res);
+  const saved = state.sessions.admins?.[claims.sessionId];
+  const user = state.users.find((item) => item.id === claims.sub && item.accountGroup === "Admin" && item.status === "Active");
+  if (!saved || saved.token !== bearerToken(req) || !user) {
+    forbidden(res, "Admin session is invalid");
     return null;
   }
-  req.adminSession = session;
-  return session;
+  req.adminSession = { ...claims, user };
+  return req.adminSession;
 }
 
 function requireAdminPermission(req, res, permission) {
@@ -360,312 +85,109 @@ function requireAdminPermission(req, res, permission) {
   return false;
 }
 
-function signContributorPayload(payload) {
-  return crypto.createHmac("sha256", contributorTokenSecret).update(payload).digest("base64url");
+function contributorClaimsFromRequest(req, state) {
+  const claims = verifyToken("contributor", bearerToken(req));
+  if (!claims) return null;
+  const saved = state.sessions.contributors?.[claims.sessionId];
+  const user = state.users.find((item) => item.id === claims.sub && item.accountGroup === "Contributor");
+  if (!saved || saved.token !== bearerToken(req) || !user || !["Active", "Pending"].includes(user.status)) return null;
+  return { ...claims, user };
 }
 
-function issueContributorToken(state, user) {
-  const expiresAt = Date.now() + contributorTokenTtlMs;
-  const payload = base64url({
+function requireContributor(req, res, state) {
+  const claims = contributorClaimsFromRequest(req, state);
+  if (!claims) {
+    forbidden(res, "Contributor phone verification required");
+    return null;
+  }
+  const profile = findContributorProfile(state, claims.sub);
+  if (!profile) {
+    forbidden(res, "Contributor profile required");
+    return null;
+  }
+  req.contributorSession = claims;
+  return { claims, user: claims.user, profile };
+}
+
+function activeRoleForUser(state, user) {
+  return state.access.roles.find((role) => role.enabled && role.name === user.adminRole) ||
+    state.access.roles.find((role) => role.enabled);
+}
+
+function publicAdminUser(user, role) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: role?.name || user.adminRole || "Admin",
+    permissions: role?.permissions || permissionList()
+  };
+}
+
+function issueAdminSession(state, user, role) {
+  const sessionId = uniqueId("admin-session");
+  const issued = issueToken("admin", {
+    sessionId,
+    sub: user.id,
+    role: role?.name || user.adminRole || "Admin",
+    permissions: role?.permissions || permissionList()
+  }, adminTokenTtlMs);
+  state.sessions.admins[sessionId] = {
+    token: issued.token,
+    userId: user.id,
+    role: role?.name || user.adminRole || "Admin",
+    expiresAt: issued.expiresAt,
+    createdAt: new Date().toISOString()
+  };
+  return issued;
+}
+
+function issueContributorSession(state, user, profile) {
+  const sessionId = uniqueId("contributor-session");
+  const issued = issueToken("contributor", {
+    sessionId,
     sub: user.id,
     phone: user.phone,
-    category: user.category,
-    country: user.country,
-    expiresAt
-  });
-  const token = `${payload}.${signContributorPayload(payload)}`;
-  state.contributorSessions = state.contributorSessions || {};
-  state.contributorSessions[user.id] = { token, expiresAt, phone: user.phone, category: user.category };
-  return { token, expiresAt };
-}
-
-function verifyContributorToken(token, state = readState()) {
-  if (!token || !token.includes(".")) return null;
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature || signContributorPayload(payload) !== signature) return null;
-  try {
-    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!session.expiresAt || Date.now() > Number(session.expiresAt)) return null;
-    const saved = state.contributorSessions?.[session.sub];
-    if (saved?.token && saved.token !== token) return null;
-    const user = state.users.find((item) => item.id === session.sub && item.accountGroup === "Contributor");
-    if (!user || !["Active", "Pending"].includes(user.status)) return null;
-    return { ...session, user };
-  } catch {
-    return null;
-  }
-}
-
-function requireContributor(req, res, state = readState()) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  const session = verifyContributorToken(token, state);
-  if (!session) {
-    json(res, 401, { error: "Contributor phone verification required" });
-    return null;
-  }
-  req.contributorSession = session;
-  return session;
-}
-
-function allowedContributorCountries(state) {
-  const countries = state.config.countryRules
-    .filter((rule) => rule.contributorsAllowed)
-    .map((rule) => rule.country);
-  return countries.length ? countries : ["Nigeria", "Ghana", "Kenya", "South Africa", "Rwanda"];
-}
-
-function uploadStatus(state, upload) {
-  if (!allowedContributorCountries(state).includes(upload.country)) return "Country Review";
-  if (Number(upload.quality) < Number(state.config.aiQualityThreshold)) return "AI Enhancement";
-  if (upload.faces && (!upload.release || !upload.copyrightApproval)) return "Face/Copyright Verification";
-  return "Admin Review";
-}
-
-function profileComplete(state, contributor = state.contributor) {
-  const c = contributor;
-  return Boolean(
-    allowedContributorCountries(state).includes(c.country) &&
-      c.email &&
-      c.address &&
-      c.profilePhoto &&
-      c.governmentId &&
-      c.faceScan &&
-      Number(c.faceScanScore) >= Number(state.config.faceConfidence) &&
-      c.agreementsSigned &&
-      c.contentAgreementSigned &&
-      c.copyrightAgreementSigned
-  );
-}
-
-function contributorCategory(state, contributorType) {
-  return state.userCategories.find((item) =>
-    item.group === "Contributor" &&
-    item.enabled &&
-    item.name === contributorType
-  );
-}
-
-function allowedCategoriesForContributor(state, contributorType) {
-  const category = contributorCategory(state, contributorType);
-  const configured = category?.allowedContentCategories?.length
-    ? category.allowedContentCategories
-    : state.config.contributorPermissions?.[contributorType];
-  return normalizeList(configured);
-}
-
-function activeStarterLimit(state) {
-  const min = Number(state.config.freeUploadMin || 3);
-  const max = Number(state.config.freeUploadMax || 5);
-  const active = Number(state.config.activeFreeLimit || min);
-  return Math.max(min, Math.min(max, active));
-}
-
-function accessLevelForContributor(state, contributor) {
-  return (state.config.contributorAccessLevels || []).find((level) => level.name === contributor.accessLevel) ||
-    state.config.contributorAccessLevels?.[0] ||
-    defaultConfig.contributorAccessLevels[0];
-}
-
-function contributorUploadCount(state, userId) {
-  return state.uploads.filter((item) => item.owner === userId).length;
-}
-
-function contributorCanUpload(state, user, contributor) {
-  const used = contributorUploadCount(state, user.id);
-  const starterLimit = activeStarterLimit(state);
-  if (used < starterLimit) return { ok: true, used, limit: starterLimit, mode: "starter" };
-  const level = accessLevelForContributor(state, contributor);
-  const paidLimit = Number(level.uploads || starterLimit);
-  if (contributor.subscriptionActive && profileComplete(state, contributor) && used < paidLimit) {
-    return { ok: true, used, limit: paidLimit, mode: "paid" };
-  }
-  return {
-    ok: false,
-    used,
-    limit: contributor.subscriptionActive ? paidLimit : starterLimit,
-    error: `Starter upload limit reached. Complete profile verification and activate a paid access level to upload more than ${starterLimit} images.`
+    category: profile.type,
+    country: profile.country
+  }, contributorTokenTtlMs);
+  state.sessions.contributors[sessionId] = {
+    token: issued.token,
+    userId: user.id,
+    phone: user.phone,
+    category: profile.type,
+    expiresAt: issued.expiresAt,
+    createdAt: new Date().toISOString()
   };
+  return issued;
 }
 
-function syncContributorUser(state, user, contributor) {
-  const allowedContentCategories = allowedCategoriesForContributor(state, contributor.type);
-  user.category = contributor.type;
-  user.country = contributor.country;
-  user.email = contributor.email || user.email;
-  user.allowedContentCategories = allowedContentCategories;
-  user.verificationStatus = profileComplete(state, contributor) ? "Verified" : "OTP Verified";
-  user.status = allowedContributorCountries(state).includes(contributor.country)
-    ? (profileComplete(state, contributor) ? "Active" : "Pending")
-    : "Blocked";
-  user.lastActivity = profileComplete(state, contributor) ? "Contributor profile verified" : "Contributor profile in progress";
-  return user;
-}
-
-function findOrCreateContributorUser(state, phone) {
-  const normalizedPhone = String(phone || "").trim();
-  let user = state.users.find((item) => item.accountGroup === "Contributor" && item.phone === normalizedPhone);
-  if (user) return user;
-  const contributor = state.contributor || defaultState().contributor;
-  user = normalizeManagedUser({
-    name: `Contributor ${normalizedPhone}`,
-    phone: normalizedPhone,
-    accountGroup: "Contributor",
-    category: contributor.type,
-    country: contributor.country,
-    status: "Pending",
-    verificationStatus: "OTP Verified",
-    allowedContentCategories: allowedCategoriesForContributor(state, contributor.type),
-    lastActivity: "Phone OTP verified"
-  });
-  state.users.unshift(user);
-  return user;
-}
-
-function publicState(state) {
-  const output = clone(state);
-  delete output.otpCodes;
-  delete output.contributorSessions;
-  delete output.adminAccess;
-  delete output.auditLog;
-  output.users = output.users.map((user) => ({
-    id: user.id,
-    accountGroup: user.accountGroup,
-    category: user.category,
-    country: user.country,
-    status: user.status,
-    verificationStatus: user.verificationStatus,
-    allowedContentCategories: user.allowedContentCategories
-  }));
-  return output;
-}
-
-function uniqueId(prefix) {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function normalizeList(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
-  return String(value || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function normalizeUserCategory(input = {}) {
-  return {
-    id: input.id || uniqueId("category"),
-    group: input.group || "Contributor",
-    name: input.name || "New Category",
-    description: input.description || "",
-    enabled: input.enabled !== false,
-    requiresVerification: Boolean(input.requiresVerification),
-    allowedContentCategories: normalizeList(input.allowedContentCategories)
-  };
-}
-
-function normalizeAdminRole(input = {}) {
-  return {
-    id: input.id || uniqueId("role"),
-    name: input.name || "New Admin Role",
-    description: input.description || "",
-    permissions: normalizeList(input.permissions),
-    enabled: input.enabled !== false
-  };
-}
-
-function normalizeManagedUser(input = {}) {
-  return {
-    id: input.id || uniqueId("user"),
-    name: input.name || "New User",
-    phone: input.phone || "",
-    email: input.email || "",
-    accountGroup: input.accountGroup || "Contributor",
-    category: input.category || "Photo Content",
-    country: input.country || "Nigeria",
-    status: input.status || "Pending",
-    verificationStatus: input.verificationStatus || "Not Started",
-    adminRole: input.adminRole || "",
-    allowedContentCategories: normalizeList(input.allowedContentCategories),
-    createdAt: input.createdAt || new Date().toISOString(),
-    lastActivity: input.lastActivity || "Created by admin"
-  };
-}
-
-function normalizeContentItem(state, input = {}) {
-  const item = {
-    id: input.id || uniqueId("content"),
-    owner: input.owner || "admin",
-    title: input.title || "Untitled VUEKUMI Content",
-    category: input.category || "Photo Content",
-    contributorType: input.contributorType || "Photo Content",
-    country: input.country || "Nigeria",
-    quality: Number(input.quality || 80),
-    faces: Boolean(input.faces),
-    release: Boolean(input.release),
-    copyrightApproval: Boolean(input.copyrightApproval),
-    status: input.status || "Admin Review",
-    featured: Boolean(input.featured),
-    visibility: input.visibility || "Public",
-    moderationNote: input.moderationNote || "",
-    src: input.src || "images/africa-content-2.jpg",
-    createdAt: input.createdAt || new Date().toISOString()
-  };
-  if (!input.status) item.status = uploadStatus(state, item);
-  return item;
-}
-
-function publicAdminState(state) {
-  const pendingContent = state.uploads.filter((item) => !["Approved", "Rejected"].includes(item.status)).length;
-  const pendingUsers = state.users.filter((item) => item.status !== "Active").length;
-  const contributorUsers = state.users.filter((item) => item.accountGroup === "Contributor").length;
-  const endusers = state.users.filter((item) => item.accountGroup === "Enduser").length;
-  return {
-    metrics: {
-      users: state.users.length,
-      pendingUsers,
-      contributors: contributorUsers,
-      endusers,
-      content: state.uploads.length,
-      pendingContent,
-      userCategories: state.userCategories.length,
-      adminRoles: state.adminAccess.length
-    },
-    recentUsers: state.users.slice(0, 6),
-    recentContent: state.uploads.slice(0, 6),
-    recentActivity: adminActivity(state).slice(0, 10)
-  };
-}
-
-function adminActivity(state) {
-  return [...state.auditLog, ...state.platformActivities].map((item) => {
-    const action = String(item.action || item.title || item.type || "").replace("face.match.simulated", "face.match.reviewed");
-    return { ...item, action, title: item.title || action };
-  });
-}
-
-function handleApi(req, res, url) {
+async function handleApi(req, res, url) {
   const method = req.method || "GET";
 
   if (method === "GET" && url.pathname === "/api/health") {
-    return json(res, 200, { ok: true, service: "vuekumi-backend", version: 1 });
+    return json(res, 200, {
+      ok: true,
+      service: "vuekumi-backend",
+      version: 2,
+      backend: "redesigned-domain-api"
+    });
   }
 
   if (method === "GET" && url.pathname === "/api/state") {
-    return json(res, 200, publicState(readState()));
+    const state = readState();
+    return json(res, 200, publicState(state, contributorClaimsFromRequest(req, state)));
   }
 
   if ((method === "PUT" || method === "POST") && url.pathname === "/api/state") {
-    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "settings")) return;
-    return readBody(req)
-      .then((body) => {
-        const incoming = { ...defaultState(), ...body };
-        incoming.otpCodes = readState().otpCodes || {};
-        audit(incoming, "state.saved", { source: "frontend-sync" });
-        saveState(incoming);
-        json(res, 200, { ok: true, state: incoming });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    if (!requireAdmin(req, res, state) || !requireAdminPermission(req, res, "settings")) return;
+    const body = await readBody(req);
+    const nextState = readState();
+    nextState.config = normalizeConfig(body.config || body);
+    audit(nextState, "state.config_saved", { source: "admin-state-sync" }, req.adminSession.sub);
+    writeState(nextState);
+    return json(res, 200, { ok: true, state: publicState(nextState) });
   }
 
   if (method === "GET" && url.pathname === "/api/config") {
@@ -673,433 +195,337 @@ function handleApi(req, res, url) {
   }
 
   if (method === "PUT" && url.pathname === "/api/config") {
-    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "settings")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        state.config = { ...state.config, ...(body.config || body) };
-        audit(state, "config.updated", { keys: Object.keys(body.config || body) });
-        saveState(state);
-        json(res, 200, state.config);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    if (!requireAdmin(req, res, state) || !requireAdminPermission(req, res, "settings")) return;
+    const body = await readBody(req);
+    state.config = normalizeConfig({ ...state.config, ...(body.config || body) });
+    audit(state, "config.updated", { keys: Object.keys(body.config || body) }, req.adminSession.sub);
+    writeState(state);
+    return json(res, 200, state.config);
+  }
+
+  if (method === "GET" && url.pathname === "/api/integrations") {
+    const state = readState();
+    return json(res, 200, integrationMatrix(state));
   }
 
   if (method === "POST" && url.pathname === "/api/admin/login") {
-    return readBody(req)
-      .then((body) => {
-        const identifier = String(body.identifier || "").trim().toLowerCase();
-        const accessKey = String(body.accessKey || "");
-        if (!identifier || !accessKey) return forbidden(res, "Admin identifier and access key are required");
-        if (accessKey !== adminAccessKey) return forbidden(res, "Invalid admin access key");
-        const state = readState();
-        const user = state.users.find((item) =>
-          item.accountGroup === "Admin" &&
-          item.status === "Active" &&
-          [item.email, item.phone, item.name].some((value) => String(value || "").trim().toLowerCase() === identifier)
-        );
-        if (!user) return forbidden(res, "Admin user is not active or does not exist");
-        const role = state.adminAccess.find((item) => item.name === user.adminRole && item.enabled) || state.adminAccess.find((item) => item.enabled);
-        const issued = issueAdminToken(user, role);
-        audit(state, "admin.login", { id: user.id, role: role?.name || user.adminRole });
-        saveState(state);
-        json(res, 200, {
-          ok: true,
-          token: issued.token,
-          expiresAt: issued.expiresAt,
-          user: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            role: role?.name || user.adminRole || "Admin",
-            permissions: role?.permissions || defaultAdminPermissions
-          }
-        });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
-  }
+    const body = await readBody(req);
+    const identifier = String(body.identifier || "").trim().toLowerCase();
+    const accessKey = String(body.accessKey || "");
+    if (!identifier || !accessKey) return forbidden(res, "Admin identifier and access key are required");
+    if (accessKey !== adminAccessKey) return forbidden(res, "Invalid admin access key");
 
-  if (url.pathname.startsWith("/api/admin/") && !requireAdmin(req, res)) return;
-
-  if (method === "GET" && url.pathname === "/api/admin/overview") {
-    if (!requireAdminPermission(req, res, "overview")) return;
-    return json(res, 200, publicAdminState(readState()));
-  }
-
-  if (method === "GET" && url.pathname === "/api/admin/access") {
-    if (!requireAdminPermission(req, res, "access")) return;
     const state = readState();
+    const user = state.users.find((item) =>
+      item.accountGroup === "Admin" &&
+      item.status === "Active" &&
+      [item.email, item.phone, item.name].some((value) => String(value || "").trim().toLowerCase() === identifier)
+    );
+    if (!user) return forbidden(res, "Admin user is not active or does not exist");
+
+    const role = activeRoleForUser(state, user);
+    const issued = issueAdminSession(state, user, role);
+    audit(state, "admin.login", { id: user.id, role: role?.name || user.adminRole }, user.id);
+    writeState(state);
     return json(res, 200, {
-      adminAccess: state.adminAccess,
-      userCategories: state.userCategories,
-      contentCategories: state.config.photoCategories,
-      contributorPermissions: state.config.contributorPermissions,
-      permissions: defaultAdminPermissions
+      ok: true,
+      token: issued.token,
+      expiresAt: issued.expiresAt,
+      user: publicAdminUser(user, role)
     });
   }
 
-  if (method === "PUT" && url.pathname === "/api/admin/access") {
-    if (!requireAdminPermission(req, res, "access")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        if (Array.isArray(body.adminAccess)) state.adminAccess = body.adminAccess.map(normalizeAdminRole);
-        if (Array.isArray(body.userCategories)) state.userCategories = body.userCategories.map(normalizeUserCategory);
-        if (Array.isArray(body.contentCategories)) state.config.photoCategories = normalizeList(body.contentCategories);
-        if (body.contributorPermissions && typeof body.contributorPermissions === "object") {
-          state.config.contributorPermissions = body.contributorPermissions;
-        }
-        audit(state, "admin.access.updated", {
-          roles: state.adminAccess.length,
-          userCategories: state.userCategories.length,
-          contentCategories: state.config.photoCategories.length
-        });
-        saveState(state);
-        json(res, 200, {
-          adminAccess: state.adminAccess,
-          userCategories: state.userCategories,
-          contentCategories: state.config.photoCategories,
-          contributorPermissions: state.config.contributorPermissions,
-          permissions: defaultAdminPermissions
-        });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
-  }
-
-  if (method === "GET" && url.pathname === "/api/admin/users") {
-    if (!requireAdminPermission(req, res, "users")) return;
-    return json(res, 200, readState().users);
-  }
-
-  if (method === "POST" && url.pathname === "/api/admin/users") {
-    if (!requireAdminPermission(req, res, "users")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const user = normalizeManagedUser(body);
-        state.users.unshift(user);
-        audit(state, "admin.user.created", { id: user.id, accountGroup: user.accountGroup, category: user.category });
-        saveState(state);
-        json(res, 201, user);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
-  }
-
-  const adminUserRoute = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
-  if (method === "PATCH" && adminUserRoute) {
-    if (!requireAdminPermission(req, res, "users")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const index = state.users.findIndex((item) => item.id === adminUserRoute[1]);
-        if (index < 0) return notFound(res);
-        state.users[index] = normalizeManagedUser({ ...state.users[index], ...body, id: state.users[index].id });
-        audit(state, "admin.user.updated", { id: state.users[index].id, status: state.users[index].status, category: state.users[index].category });
-        saveState(state);
-        json(res, 200, state.users[index]);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
-  }
-
-  if (method === "GET" && url.pathname === "/api/admin/content") {
-    if (!requireAdminPermission(req, res, "content")) return;
+  if (url.pathname.startsWith("/api/admin/")) {
     const state = readState();
-    return json(res, 200, state.uploads.map((item) => normalizeContentItem(state, item)));
-  }
+    if (!requireAdmin(req, res, state)) return;
 
-  if (method === "POST" && url.pathname === "/api/admin/content") {
-    if (!requireAdminPermission(req, res, "content")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const item = normalizeContentItem(state, body);
-        state.uploads.unshift(item);
-        audit(state, "admin.content.created", { id: item.id, category: item.category, status: item.status });
-        saveState(state);
-        json(res, 201, item);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
-  }
+    if (method === "GET" && url.pathname === "/api/admin/overview") {
+      if (!requireAdminPermission(req, res, "overview")) return;
+      return json(res, 200, adminOverview(state));
+    }
 
-  const adminContentRoute = url.pathname.match(/^\/api\/admin\/content\/([^/]+)$/);
-  if (method === "PATCH" && adminContentRoute) {
-    if (!requireAdminPermission(req, res, "content")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const index = state.uploads.findIndex((item) => item.id === adminContentRoute[1]);
-        if (index < 0) return notFound(res);
-        state.uploads[index] = normalizeContentItem(state, { ...state.uploads[index], ...body, id: state.uploads[index].id });
-        audit(state, "admin.content.updated", { id: state.uploads[index].id, status: state.uploads[index].status, category: state.uploads[index].category });
-        saveState(state);
-        json(res, 200, state.uploads[index]);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
-  }
+    if (method === "GET" && url.pathname === "/api/admin/access") {
+      if (!requireAdminPermission(req, res, "access")) return;
+      return json(res, 200, {
+        adminAccess: state.access.roles,
+        userCategories: state.access.userCategories,
+        contentCategories: state.config.photoCategories,
+        contributorPermissions: state.config.contributorPermissions,
+        permissions: permissionList()
+      });
+    }
 
-  if (method === "GET" && url.pathname === "/api/admin/activity") {
-    if (!requireAdminPermission(req, res, "activity")) return;
-    const state = readState();
-    return json(res, 200, adminActivity(state));
+    if (method === "PUT" && url.pathname === "/api/admin/access") {
+      if (!requireAdminPermission(req, res, "access")) return;
+      const body = await readBody(req);
+      if (Array.isArray(body.adminAccess)) state.access.roles = body.adminAccess.map(normalizeRole);
+      if (Array.isArray(body.userCategories)) state.access.userCategories = body.userCategories.map(normalizeUserCategory);
+      if (Array.isArray(body.contentCategories)) state.config.photoCategories = body.contentCategories;
+      if (body.contributorPermissions && typeof body.contributorPermissions === "object") {
+        state.config.contributorPermissions = body.contributorPermissions;
+      }
+      audit(state, "admin.access.updated", {
+        roles: state.access.roles.length,
+        userCategories: state.access.userCategories.length,
+        contentCategories: state.config.photoCategories.length
+      }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, {
+        adminAccess: state.access.roles,
+        userCategories: state.access.userCategories,
+        contentCategories: state.config.photoCategories,
+        contributorPermissions: state.config.contributorPermissions,
+        permissions: permissionList()
+      });
+    }
+
+    if (method === "GET" && url.pathname === "/api/admin/users") {
+      if (!requireAdminPermission(req, res, "users")) return;
+      return json(res, 200, state.users);
+    }
+
+    if (method === "POST" && url.pathname === "/api/admin/users") {
+      if (!requireAdminPermission(req, res, "users")) return;
+      const user = normalizeUser(await readBody(req));
+      state.users.unshift(user);
+      if (user.accountGroup === "Contributor" && !findContributorProfile(state, user.id)) {
+        state.contributorProfiles.unshift(require("./store").normalizeContributorProfile({ userId: user.id, type: user.category, country: user.country }, user));
+      }
+      audit(state, "admin.user.created", { id: user.id, accountGroup: user.accountGroup, category: user.category }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 201, user);
+    }
+
+    const adminUserRoute = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+    if (method === "PATCH" && adminUserRoute) {
+      if (!requireAdminPermission(req, res, "users")) return;
+      const index = state.users.findIndex((item) => item.id === adminUserRoute[1]);
+      if (index < 0) return notFound(res);
+      state.users[index] = normalizeUser({ ...state.users[index], ...(await readBody(req)), id: state.users[index].id });
+      const profile = findContributorProfile(state, state.users[index].id);
+      if (profile) syncUserFromContributor(state, state.users[index], profile);
+      audit(state, "admin.user.updated", { id: state.users[index].id, status: state.users[index].status, category: state.users[index].category }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, state.users[index]);
+    }
+
+    if (method === "GET" && url.pathname === "/api/admin/content") {
+      if (!requireAdminPermission(req, res, "content")) return;
+      return json(res, 200, state.assets);
+    }
+
+    if (method === "POST" && url.pathname === "/api/admin/content") {
+      if (!requireAdminPermission(req, res, "content")) return;
+      const asset = normalizeAsset(await readBody(req));
+      asset.status = asset.status || uploadStatus(state, asset);
+      state.assets.unshift(asset);
+      audit(state, "admin.content.created", { id: asset.id, category: asset.category, status: asset.status }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 201, asset);
+    }
+
+    const adminContentRoute = url.pathname.match(/^\/api\/admin\/content\/([^/]+)$/);
+    if (method === "PATCH" && adminContentRoute) {
+      if (!requireAdminPermission(req, res, "content")) return;
+      const index = state.assets.findIndex((item) => item.id === adminContentRoute[1]);
+      if (index < 0) return notFound(res);
+      state.assets[index] = normalizeAsset({ ...state.assets[index], ...(await readBody(req)), id: state.assets[index].id });
+      audit(state, "admin.content.updated", { id: state.assets[index].id, status: state.assets[index].status, category: state.assets[index].category }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, state.assets[index]);
+    }
+
+    if (method === "GET" && url.pathname === "/api/admin/activity") {
+      if (!requireAdminPermission(req, res, "activity")) return;
+      return json(res, 200, adminActivity(state));
+    }
   }
 
   if (method === "POST" && url.pathname === "/api/auth/send-otp") {
-    return readBody(req)
-      .then((body) => {
-        if (!body.phone) return json(res, 400, { error: "phone is required" });
-        const state = readState();
-        const code = String(crypto.randomInt(100000, 1000000));
-        state.otpCodes = state.otpCodes || {};
-        state.otpCodes[body.phone] = { code, createdAt: new Date().toISOString() };
-        state.session.phone = body.phone;
-        state.session.otpSent = true;
-        audit(state, "otp.sent", { phone: body.phone, provider: "configured-sms-provider" });
-        saveState(state);
-        const response = { ok: true, phone: body.phone };
-        if (process.env.NODE_ENV !== "production") response.otpPreview = code;
-        json(res, 200, response);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const body = await readBody(req);
+    if (!body.phone) return json(res, 400, { error: "phone is required" });
+    const state = readState();
+    const code = randomOtp();
+    state.otpChallenges[String(body.phone).trim()] = {
+      code,
+      purpose: body.purpose || "contributor-login",
+      createdAt: new Date().toISOString(),
+      expiresAt: Date.now() + otpTtlMs
+    };
+    audit(state, "otp.sent", { phone: body.phone, provider: "country-sms-provider" });
+    writeState(state);
+    const payload = { ok: true, phone: body.phone };
+    if (process.env.NODE_ENV !== "production") payload.otpPreview = code;
+    return json(res, 200, payload);
   }
 
   if (method === "POST" && url.pathname === "/api/auth/verify-otp") {
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const record = state.otpCodes?.[body.phone];
-        const expired = record?.createdAt && Date.now() - new Date(record.createdAt).getTime() > otpTtlMs;
-        const verified = Boolean(record && !expired && body.otp === record.code);
-        state.session.phone = body.phone || state.session.phone;
-        state.session.otpSent = true;
-        state.session.otpVerified = verified;
-        let contributorAuth = null;
-        let user = null;
-        if (verified) {
-          user = findOrCreateContributorUser(state, body.phone);
-          user.verificationStatus = "OTP Verified";
-          user.lastActivity = "Phone OTP verified";
-          contributorAuth = issueContributorToken(state, user);
-          delete state.otpCodes[body.phone];
-        }
-        audit(state, verified ? "otp.verified" : "otp.failed", { phone: body.phone });
-        saveState(state);
-        json(res, verified ? 200 : 401, {
-          ok: verified,
-          verified,
-          token: contributorAuth?.token,
-          expiresAt: contributorAuth?.expiresAt,
-          user
-        });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const body = await readBody(req);
+    const phone = String(body.phone || "").trim();
+    const state = readState();
+    const challenge = state.otpChallenges[phone];
+    const verified = Boolean(challenge && Date.now() <= Number(challenge.expiresAt) && body.otp === challenge.code);
+    if (!verified) {
+      audit(state, "otp.failed", { phone });
+      writeState(state);
+      return json(res, 401, { ok: false, verified: false });
+    }
+
+    const { user, profile } = findOrCreateContributorByPhone(state, phone);
+    user.verificationStatus = "OTP Verified";
+    user.lastActivity = "Phone OTP verified";
+    const issued = issueContributorSession(state, user, profile);
+    delete state.otpChallenges[phone];
+    audit(state, "otp.verified", { phone, userId: user.id }, user.id);
+    writeState(state);
+    return json(res, 200, {
+      ok: true,
+      verified: true,
+      token: issued.token,
+      expiresAt: issued.expiresAt,
+      user,
+      contributor: profile
+    });
   }
 
   if (method === "PUT" && url.pathname === "/api/contributor") {
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const session = requireContributor(req, res, state);
-        if (!session) return;
-        const nextContributor = { ...state.contributor, ...(body.contributor || body) };
-        if (!allowedContributorCountries(state).includes(nextContributor.country)) {
-          return json(res, 403, { error: "VUEKUMI currently accepts contributors only from admin-approved African countries." });
-        }
-        state.contributor = nextContributor;
-        syncContributorUser(state, session.user, state.contributor);
-        audit(state, "contributor.updated", { userId: session.user.id, country: state.contributor.country, type: state.contributor.type });
-        saveState(state);
-        json(res, 200, { contributor: state.contributor, profileComplete: profileComplete(state) });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    const auth = requireContributor(req, res, state);
+    if (!auth) return;
+    const body = await readBody(req);
+    const nextProfile = {
+      ...auth.profile,
+      ...(body.contributor || body),
+      userId: auth.user.id
+    };
+    if (!allowedContributorCountries(state).includes(nextProfile.country)) {
+      return json(res, 403, { error: "VUEKUMI currently accepts contributors only from admin-approved African countries." });
+    }
+    const index = state.contributorProfiles.findIndex((profile) => profile.userId === auth.user.id);
+    state.contributorProfiles[index] = require("./store").normalizeContributorProfile(nextProfile, auth.user);
+    syncUserFromContributor(state, auth.user, state.contributorProfiles[index]);
+    audit(state, "contributor.updated", { userId: auth.user.id, country: nextProfile.country, type: nextProfile.type }, auth.user.id);
+    writeState(state);
+    return json(res, 200, { contributor: state.contributorProfiles[index], profileComplete: profileComplete(state, state.contributorProfiles[index]) });
   }
 
   if (method === "POST" && url.pathname === "/api/contributor/face-match") {
     const state = readState();
-    const session = requireContributor(req, res, state);
-    if (!session) return;
-    state.contributor.faceScan = true;
-    state.contributor.faceScanScore = Math.max(Number(state.contributor.faceScanScore || 0), Number(state.config.faceConfidence));
-    syncContributorUser(state, session.user, state.contributor);
-    audit(state, "face.match.verified", { userId: session.user.id, score: state.contributor.faceScanScore });
-    saveState(state);
-    return json(res, 200, { contributor: state.contributor, profileComplete: profileComplete(state) });
+    const auth = requireContributor(req, res, state);
+    if (!auth) return;
+    auth.profile.faceScan = true;
+    auth.profile.faceScanScore = Math.max(Number(auth.profile.faceScanScore || 0), Number(state.config.faceConfidence || 88));
+    syncUserFromContributor(state, auth.user, auth.profile);
+    audit(state, "face.match.verified", { userId: auth.user.id, score: auth.profile.faceScanScore }, auth.user.id);
+    writeState(state);
+    return json(res, 200, { contributor: auth.profile, profileComplete: profileComplete(state, auth.profile) });
   }
 
   if (method === "POST" && url.pathname === "/api/subscriptions/contributor") {
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const session = requireContributor(req, res, state);
-        if (!session) return;
-        const level = (state.config.contributorAccessLevels || []).find((item) => item.name === (body.accessLevel || state.contributor.accessLevel));
-        if (!level) return json(res, 400, { error: "Unknown contributor access level" });
-        if (level.requiresVerification && !profileComplete(state)) {
-          return json(res, 403, { error: "Complete profile, face, ID, and agreement verification before activating this access level." });
-        }
-        state.contributor.accessLevel = body.accessLevel || state.contributor.accessLevel;
-        state.contributor.subscriptionActive = true;
-        syncContributorUser(state, session.user, state.contributor);
-        audit(state, "contributor.subscription.activated", {
-          userId: session.user.id,
-          accessLevel: state.contributor.accessLevel,
-          gateway: state.config.subscriptionGateway
-        });
-        saveState(state);
-        json(res, 200, { contributor: state.contributor, gateway: state.config.subscriptionGateway });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    const auth = requireContributor(req, res, state);
+    if (!auth) return;
+    const body = await readBody(req);
+    const level = (state.config.contributorAccessLevels || []).find((item) => item.name === (body.accessLevel || auth.profile.accessLevel));
+    if (!level) return json(res, 400, { error: "Unknown contributor access level" });
+    if (level.requiresVerification && !profileComplete(state, auth.profile)) {
+      return json(res, 403, { error: "Complete profile, face, ID, and agreement verification before activating this access level." });
+    }
+    auth.profile.accessLevel = level.name;
+    auth.profile.subscriptionActive = true;
+    syncUserFromContributor(state, auth.user, auth.profile);
+    audit(state, "contributor.subscription.activated", { userId: auth.user.id, accessLevel: level.name, gateway: state.config.subscriptionGateway }, auth.user.id);
+    writeState(state);
+    return json(res, 200, { contributor: auth.profile, gateway: state.config.subscriptionGateway });
   }
 
   if (method === "GET" && url.pathname === "/api/uploads") {
-    return json(res, 200, readState().uploads);
+    return json(res, 200, readState().assets);
   }
 
   if (method === "POST" && url.pathname === "/api/uploads") {
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const session = requireContributor(req, res, state);
-        if (!session) return;
-        const contributor = state.contributor;
-        if (!allowedContributorCountries(state).includes(body.country || contributor.country)) {
-          return json(res, 403, { error: "Contributors must be from an admin-approved African country." });
-        }
-        const contributorType = body.contributorType || contributor.type;
-        const allowedCategories = allowedCategoriesForContributor(state, contributorType);
-        const category = body.category || "Photo Content";
-        if (!allowedCategories.includes(category)) {
-          return json(res, 403, { error: `${contributorType} contributors cannot post ${category}. Admin can update this access matrix.` });
-        }
-        const uploadAccess = contributorCanUpload(state, session.user, contributor);
-        if (!uploadAccess.ok) return json(res, 402, { error: uploadAccess.error, uploadAccess });
-        const upload = {
-          id: crypto.randomUUID(),
-          owner: session.user.id,
-          title: body.title || "Untitled VUEKUMI Upload",
-          category,
-          contributorType,
-          country: body.country || contributor.country,
-          quality: Number(body.quality || 70),
-          faces: Boolean(body.faces),
-          release: Boolean(body.release),
-          copyrightApproval: Boolean(body.copyrightApproval),
-          src: body.src || "images/africa-content-2.jpg",
-          createdAt: new Date().toISOString()
-        };
-        upload.status = uploadStatus(state, upload);
-        state.uploads.unshift(upload);
-        syncContributorUser(state, session.user, contributor);
-        audit(state, "upload.created", { id: upload.id, userId: session.user.id, status: upload.status });
-        saveState(state);
-        json(res, 201, { ...upload, uploadAccess: contributorCanUpload(state, session.user, contributor) });
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    const auth = requireContributor(req, res, state);
+    if (!auth) return;
+    const result = createAssetForContributor(state, auth.user, auth.profile, await readBody(req));
+    if (result.error) return json(res, result.errorStatus || 400, { error: result.error, uploadAccess: result.uploadAccess });
+    syncUserFromContributor(state, auth.user, auth.profile);
+    audit(state, "upload.created", { id: result.asset.id, userId: auth.user.id, status: result.asset.status }, auth.user.id);
+    writeState(state);
+    return json(res, 201, { ...result.asset, uploadAccess: result.uploadAccess });
   }
 
   const uploadModeration = url.pathname.match(/^\/api\/uploads\/([^/]+)\/moderate$/);
   if (method === "PATCH" && uploadModeration) {
-    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "content")) return;
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const upload = state.uploads.find((item) => item.id === uploadModeration[1]);
-        if (!upload) return notFound(res);
-        upload.status = body.status || upload.status;
-        upload.moderationNote = body.note || upload.moderationNote || "";
-        audit(state, "upload.moderated", { id: upload.id, status: upload.status });
-        saveState(state);
-        json(res, 200, upload);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    if (!requireAdmin(req, res, state) || !requireAdminPermission(req, res, "content")) return;
+    const body = await readBody(req);
+    const asset = state.assets.find((item) => item.id === uploadModeration[1]);
+    if (!asset) return notFound(res);
+    asset.status = body.status || asset.status;
+    asset.visibility = asset.status === "Approved" ? "Public" : "Internal Review";
+    asset.moderationNote = body.note || asset.moderationNote || "";
+    state.moderationCases.unshift({ id: uniqueId("moderation"), assetId: asset.id, status: asset.status, note: asset.moderationNote, createdAt: new Date().toISOString() });
+    audit(state, "upload.moderated", { id: asset.id, status: asset.status }, req.adminSession.sub);
+    writeState(state);
+    return json(res, 200, asset);
   }
 
   const uploadEnhance = url.pathname.match(/^\/api\/uploads\/([^/]+)\/enhance$/);
   if (method === "POST" && uploadEnhance) {
-    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "content")) return;
     const state = readState();
-    const upload = state.uploads.find((item) => item.id === uploadEnhance[1]);
-    if (!upload) return notFound(res);
-    upload.quality = Math.min(100, Number(upload.quality || 0) + 18);
-    upload.status = uploadStatus(state, upload);
-    audit(state, "upload.ai_enhanced", { id: upload.id, quality: upload.quality, status: upload.status });
-    saveState(state);
-    return json(res, 200, upload);
+    if (!requireAdmin(req, res, state) || !requireAdminPermission(req, res, "content")) return;
+    const asset = state.assets.find((item) => item.id === uploadEnhance[1]);
+    if (!asset) return notFound(res);
+    const previousQuality = Number(asset.quality || 0);
+    asset.quality = Math.min(100, previousQuality + 18);
+    asset.status = uploadStatus(state, asset);
+    state.aiJobs.unshift({ id: uniqueId("ai-job"), assetId: asset.id, status: "Enhanced", qualityBefore: previousQuality, qualityAfter: asset.quality, createdAt: new Date().toISOString() });
+    audit(state, "upload.ai_enhanced", { id: asset.id, quality: asset.quality, status: asset.status }, req.adminSession.sub);
+    writeState(state);
+    return json(res, 200, asset);
   }
 
   if (method === "POST" && url.pathname === "/api/checkout") {
-    return readBody(req)
-      .then((body) => {
-        const state = readState();
-        const item = checkoutRecord(state, body);
-        state.cart.push(item);
-        audit(state, "checkout.created", {
-          id: item.id,
-          orderNumber: item.orderNumber,
-          plan: item.plan,
-          gateway: item.gateway,
-          provider: item.provider
-        });
-        saveState(state);
-        json(res, 201, item);
-      })
-      .catch((error) => json(res, 400, { error: error.message }));
+    const state = readState();
+    const order = createOrder(state, await readBody(req));
+    state.orders.push(order);
+    audit(state, "checkout.created", { id: order.id, orderNumber: order.orderNumber, plan: order.plan, gateway: order.gateway, provider: order.provider });
+    writeState(state);
+    return json(res, 201, order);
   }
 
   if (method === "GET" && url.pathname === "/api/checkout") {
-    return json(res, 200, readState().cart);
+    return json(res, 200, readState().orders);
   }
 
   const checkoutPay = url.pathname.match(/^\/api\/checkout\/([^/]+)\/pay$/);
   if (method === "POST" && checkoutPay) {
     const state = readState();
-    const item = state.cart.find((checkout) => checkout.id === checkoutPay[1]);
-    if (!item) return notFound(res);
-    const provider = paymentProviderFor(state, item.gateway);
-    if (!provider?.enabled || !provider.apiKeyRef) {
-      item.paymentStatus = "Gateway Required";
-      item.status = "Payment Needs Gateway";
-      item.gatewayConfigured = false;
-      audit(state, "checkout.gateway_required", { id: item.id, gateway: item.gateway });
-      saveState(state);
-      return json(res, 409, { error: "Payment gateway provider must be enabled with an API key reference.", checkout: item });
-    }
-    item.provider = provider.name;
-    item.apiKeyRef = provider.apiKeyRef;
-    item.gatewayConfigured = true;
-    item.providerCredentialsLoaded = Boolean(process.env[provider.apiKeyRef]);
-    if (!item.providerCredentialsLoaded) {
-      item.paymentStatus = "Pending Provider Credentials";
-      item.status = "Provider Credentials Required";
-      audit(state, "checkout.provider_credentials_required", {
-        id: item.id,
-        orderNumber: item.orderNumber,
-        provider: provider.name,
-        apiKeyRef: provider.apiKeyRef
-      });
-      saveState(state);
-      return json(res, 202, item);
-    }
-    item.paymentStatus = "Authorized";
-    item.status = "Payment Authorized";
-    item.authorizationRef = `AUTH-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-    item.authorizedAt = new Date().toISOString();
-    audit(state, "checkout.payment_authorized", {
-      id: item.id,
-      orderNumber: item.orderNumber,
-      provider: provider.name,
-      apiKeyRef: provider.apiKeyRef
+    const order = state.orders.find((item) => item.id === checkoutPay[1]);
+    if (!order) return notFound(res);
+    const result = authorizeOrder(state, order);
+    if (result.order.paymentStatus === "Authorized") createLicenseFromOrder(state, result.order);
+    audit(state, result.order.paymentStatus === "Authorized" ? "checkout.payment_authorized" : "checkout.provider_pending", {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      provider: order.provider,
+      apiKeyRef: order.apiKeyRef
     });
-    saveState(state);
-    return json(res, 200, item);
+    writeState(state);
+    if (result.error) return json(res, result.statusCode, { error: result.error, checkout: result.order });
+    return json(res, result.statusCode, result.order);
   }
 
   if (method === "POST" && url.pathname === "/api/dev/reset") {
+    const state = readState();
     if (process.env.NODE_ENV === "production") return notFound(res);
-    if (!requireAdmin(req, res) || !requireAdminPermission(req, res, "settings")) return;
-    const state = defaultState();
-    audit(state, "dev.reset");
-    saveState(state);
-    return json(res, 200, { ok: true, state });
+    if (!requireAdmin(req, res, state) || !requireAdminPermission(req, res, "settings")) return;
+    const fresh = require("./store").initialState();
+    audit(fresh, "dev.reset", {}, req.adminSession.sub);
+    writeState(fresh);
+    return json(res, 200, { ok: true, state: publicState(fresh) });
   }
 
   return notFound(res);
@@ -1109,40 +535,37 @@ function serveStatic(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === "/") pathname = "/index.html";
   const filePath = path.normalize(path.join(rootDir, pathname));
-  if (!filePath.startsWith(rootDir)) {
-    res.writeHead(403);
-    return res.end("Forbidden");
-  }
-  fs.stat(filePath, (error, stat) => {
-    if (error || !stat.isFile()) {
-      res.writeHead(404);
-      return res.end("Not found");
-    }
+  if (!filePath.startsWith(rootDir)) return notFound(res);
+  fs.readFile(filePath, (error, content) => {
+    if (error) return notFound(res);
     const ext = path.extname(filePath).toLowerCase();
-    const contentType = {
+    const type = {
       ".html": "text/html; charset=utf-8",
-      ".js": "text/javascript; charset=utf-8",
       ".css": "text/css; charset=utf-8",
+      ".js": "application/javascript; charset=utf-8",
       ".json": "application/json; charset=utf-8",
       ".png": "image/png",
       ".jpg": "image/jpeg",
       ".jpeg": "image/jpeg",
-      ".mp4": "video/mp4",
       ".svg": "image/svg+xml",
-      ".ico": "image/x-icon"
+      ".webp": "image/webp"
     }[ext] || "application/octet-stream";
-    res.writeHead(200, { "Content-Type": contentType });
-    fs.createReadStream(filePath).pipe(res);
+    res.writeHead(200, { "Content-Type": type });
+    res.end(content);
   });
 }
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (url.pathname.startsWith("/api/")) return handleApi(req, res, url);
-  return serveStatic(req, res, url);
+  if (url.pathname.startsWith("/api/")) {
+    handleApi(req, res, url).catch((error) => {
+      json(res, 500, { error: error.message || "Internal server error" });
+    });
+    return;
+  }
+  serveStatic(req, res, url);
 });
 
-ensureDataStore();
 server.listen(port, () => {
   console.log(`VUEKUMI backend running at http://localhost:${port}`);
 });
