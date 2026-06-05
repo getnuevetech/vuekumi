@@ -6,6 +6,9 @@ The new admin backend is available at:
 
 ```txt
 admin-v2.html -> /api/v2/admin/*
+admin-v2 -> /api/v2/admin/*
+new-admin -> /api/v2/admin/*
+command-center -> /api/v2/admin/*
 ```
 
 The existing admin backend is retained only as a temporary compatibility fallback:

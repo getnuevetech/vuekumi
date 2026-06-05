@@ -929,9 +929,25 @@ async function handleApi(req, res, url) {
 function serveStatic(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === "/") pathname = "/index.html";
+  const aliases = {
+    "/admin-v2": "/admin-v2.html",
+    "/new-admin": "/admin-v2.html",
+    "/command-center": "/admin-v2.html",
+    "/admin-legacy": "/admin.html"
+  };
+  pathname = aliases[pathname] || pathname;
   const filePath = path.normalize(path.join(rootDir, pathname));
   if (!filePath.startsWith(rootDir)) return notFound(res);
   fs.readFile(filePath, (error, content) => {
+    if (error && !path.extname(filePath)) {
+      const htmlPath = `${filePath}.html`;
+      if (!htmlPath.startsWith(rootDir)) return notFound(res);
+      return fs.readFile(htmlPath, (htmlError, htmlContent) => {
+        if (htmlError) return notFound(res);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(htmlContent);
+      });
+    }
     if (error) return notFound(res);
     const ext = path.extname(filePath).toLowerCase();
     const type = {

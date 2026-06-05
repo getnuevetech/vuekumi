@@ -11,7 +11,7 @@ npm start
 Open:
 
 - Public site: `http://localhost:4180/index.html`
-- New admin backend: `http://localhost:4180/admin-v2.html`
+- New admin backend: `http://localhost:4180/admin-v2.html` or `http://localhost:4180/admin-v2`
 - Legacy admin fallback: `http://localhost:4180/admin.html`
 
 ## Admin Access

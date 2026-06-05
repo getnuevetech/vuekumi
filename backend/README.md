@@ -63,6 +63,9 @@ The new admin backend UI is:
 
 ```txt
 /admin-v2.html
+/admin-v2
+/new-admin
+/command-center
 ```
 
 It uses `/api/v2/admin/*` and manages platform dashboard, access, users, contributors, content moderation, commerce, integrations, and activity.
