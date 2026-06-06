@@ -57,7 +57,7 @@ The new backend contract lives under `/api/v2/*`. New frontend, contributor, buy
 - `GET|PUT /api/v2/admin/integrations`
 - `GET /api/v2/admin/activity`
 
-## New admin backend
+## New plain admin backend
 
 The new admin backend UI is:
 
@@ -68,7 +68,7 @@ The new admin backend UI is:
 /command-center
 ```
 
-It uses `/api/v2/admin/*` and manages platform dashboard, access, users, contributors, content moderation, commerce, integrations, and activity.
+It uses `/api/v2/admin/*` and provides a plain administration interface for platform dashboard, access, users, contributors, content moderation, commerce, integrations, and activity.
 
 ## Legacy admin backend retained
 

@@ -2,7 +2,7 @@
 
 The old platform backend is replaced by the domain backend under `/api/v2/*`.
 
-The new admin backend is available at:
+The new plain admin backend is available at:
 
 ```txt
 admin-v2.html -> /api/v2/admin/*
@@ -29,7 +29,7 @@ Do not build new contributor, buyer, upload, payment, or public marketplace feat
 | Assets | `/api/v2/assets` | Image upload/listing and category posting enforcement |
 | Orders/licenses | `/api/v2/orders`, `/api/v2/licenses` | Buyer checkout, payment readiness, license records |
 | Integrations | `/api/v2/integrations` | Payment, payout, SMS provider readiness by configured key reference |
-| New admin | `/api/v2/admin/*` | Complete platform command center |
+| New admin | `/api/v2/admin/*` | Plain platform administration |
 
 ## New API routes
 
@@ -108,7 +108,7 @@ Payment behavior:
 - payment authorization stays pending until the matching environment secret is loaded
 - successful authorization creates a license record
 
-## New admin backend
+## New plain admin backend
 
 ```txt
 POST /api/v2/admin/login

@@ -5,8 +5,8 @@
   const toastNode = document.getElementById("vkAdminToast");
 
   const views = {
-    dashboard: ["New Admin Backend", "Platform Command"],
-    access: ["Access Matrix", "Roles And Categories"],
+    dashboard: ["New Admin Backend", "Platform Administration"],
+    access: ["Access Management", "Roles And Categories"],
     users: ["People", "Users And Cadres"],
     contributors: ["Contributors", "Verification Pipeline"],
     content: ["Content", "Images And Moderation"],
@@ -170,15 +170,15 @@
     app.innerHTML = `
       <div class="vk-login">
         <form class="vk-login-card" data-login>
-          <span class="vk-eyebrow">VUEKUMI New Admin Backend</span>
-          <h2>Command the African image marketplace.</h2>
-          <p>Manage access, contributors, verification, image quality, licensing, country gateways, SMS APIs, and platform activity from one backend.</p>
+          <span class="vk-eyebrow">VUEKUMI Administration</span>
+          <h2>Admin login</h2>
+          <p>Manage access, users, contributors, content, payments, integrations, and activity.</p>
           <div class="vk-form">
             <label>Admin identifier<input id="vkAdminIdentifier" autocomplete="username" placeholder="admin@vuekumi.local" required></label>
             <label>Admin access key<input id="vkAdminAccessKey" type="password" autocomplete="current-password" required></label>
           </div>
           ${message ? `<p class="vk-status bad">${esc(message)}</p>` : ""}
-          <button class="vk-button primary" type="submit">Enter Command Center</button>
+          <button class="vk-button primary" type="submit">Sign in</button>
         </form>
       </div>
     `;
@@ -202,15 +202,10 @@
     const queues = state.dashboard?.queues || {};
     return `
       <div class="vk-grid">
-        <section class="vk-panel full vk-hero-panel">
-          <div class="vk-hero-grid">
-            <div class="vk-hero-copy">
-              <span class="vk-eyebrow">VUEKUMI Command Center</span>
-              <h2>Africa-first stock photo operations.</h2>
-              <p>Operate the platform behind the public image marketplace: access, contributors, verification, AI quality, licensing, payments, SMS, and moderation.</p>
-            </div>
-            <div class="vk-mosaic">${Array.from({ length: 16 }, (_, index) => `<span class="vk-mosaic-card" title="mosaic ${index + 1}"></span>`).join("")}</div>
-          </div>
+        <section class="vk-panel full">
+          <span class="vk-eyebrow">Overview</span>
+          <h2>Platform administration</h2>
+          <p>Manage access, contributors, verification, content, commerce, integrations, and audit activity.</p>
         </section>
         ${metric("Users", metrics.users || 0, `${metrics.pendingUsers || 0} pending`)}
         ${metric("Contributors", metrics.contributors || 0, `${queues.identityReview || 0} need verification`, queues.identityReview ? "warn" : "good")}
