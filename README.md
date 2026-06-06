@@ -2,6 +2,12 @@
 
 VUEKUMI is a stock photo marketplace platform prototype with the supplied public website template and a protected local admin backend.
 
+## Standalone Rebuild
+
+A completely separate rebuild is available in `standalone/` on this branch. It has its own frontend, admin backend, backend API, data file, Dockerfile, and AWS deployment defaults so it can run beside the current app without replacing it.
+
+See [STANDALONE_REBUILD.md](./STANDALONE_REBUILD.md).
+
 ## Run Locally
 
 ```sh

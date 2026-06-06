@@ -1,0 +1,15 @@
+{
+  "name": "vuekumi-standalone",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone rebuild of the VUEKUMI stock photo platform.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/admin.js",
+    "deploy:aws": "bash scripts/deploy-aws-standalone.sh",
+    "check:aws": "bash -n scripts/deploy-aws-standalone.sh"
+  }
+}
