@@ -8,6 +8,41 @@ standalone/
 
 It is intentionally isolated from the current application. The current app can keep running while this standalone rebuild is developed, tested, and deployed to a separate AWS service.
 
+## Move it to a completely separate GitHub repo
+
+Create an empty GitHub repo first, for example:
+
+```txt
+getnuevetech/vuekumi-standalone
+```
+
+Then run this from the current repo root:
+
+```sh
+bash scripts/export-standalone-repo.sh ../vuekumi-standalone git@github.com:getnuevetech/vuekumi-standalone.git
+```
+
+Or with an HTTPS remote:
+
+```sh
+bash scripts/export-standalone-repo.sh ../vuekumi-standalone https://github.com/getnuevetech/vuekumi-standalone.git
+```
+
+The script creates a clean repo containing only the standalone app files:
+
+```txt
+package.json
+server.js
+Dockerfile
+public/
+scripts/
+.env.example
+.gitignore
+README.md
+```
+
+If you do not pass a remote URL, the script creates the local Git repo only and prints the commands to add a remote later.
+
 ## What is different
 
 - Separate Node app: `standalone/server.js`
