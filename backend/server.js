@@ -543,7 +543,14 @@ async function handleV2Api(req, res, url) {
       if (index < 0) return notFound(res);
       state.users[index] = normalizeUser({ ...state.users[index], ...(await readBody(req)), id: state.users[index].id });
       const profile = findContributorProfile(state, state.users[index].id);
-      if (profile) syncUserFromContributor(state, state.users[index], profile);
+      if (profile) {
+        profile.type = state.users[index].category;
+        profile.country = state.users[index].country;
+        profile.email = state.users[index].email || profile.email;
+        profile.verificationStatus = state.users[index].verificationStatus;
+        profile.updatedAt = new Date().toISOString();
+        state.users[index].allowedContentCategories = allowedCategoriesForContributor(state, state.users[index].category);
+      }
       audit(state, "admin.v2.user.updated", { id: state.users[index].id, status: state.users[index].status, category: state.users[index].category }, req.adminSession.sub);
       writeState(state);
       return json(res, 200, { user: state.users[index] });
@@ -553,6 +560,34 @@ async function handleV2Api(req, res, url) {
       if (!requireAdminPermission(req, res, "users")) return;
       const items = adminContributorRecords(state);
       return json(res, 200, { items, count: items.length, allowedCountries: allowedContributorCountries(state) });
+    }
+
+    const v2AdminContributorRoute = url.pathname.match(/^\/api\/v2\/admin\/contributors\/([^/]+)$/);
+    if (method === "PATCH" && v2AdminContributorRoute) {
+      if (!requireAdminPermission(req, res, "users")) return;
+      const user = state.users.find((item) => item.id === v2AdminContributorRoute[1] && item.accountGroup === "Contributor");
+      if (!user) return notFound(res);
+      const profileIndex = state.contributorProfiles.findIndex((profile) => profile.userId === user.id);
+      if (profileIndex < 0) return notFound(res);
+      const body = await readBody(req);
+      state.contributorProfiles[profileIndex] = normalizeContributorProfile({
+        ...state.contributorProfiles[profileIndex],
+        ...body,
+        faceScan: body.faceScan ?? (Number(body.faceScanScore || 0) >= Number(state.config.faceConfidence || 88)),
+        userId: user.id
+      }, user);
+      syncUserFromContributor(state, user, state.contributorProfiles[profileIndex]);
+      audit(state, "admin.v2.contributor.updated", {
+        userId: user.id,
+        type: state.contributorProfiles[profileIndex].type,
+        verificationStatus: user.verificationStatus
+      }, req.adminSession.sub);
+      writeState(state);
+      return json(res, 200, {
+        contributor: state.contributorProfiles[profileIndex],
+        user,
+        profileComplete: profileComplete(state, state.contributorProfiles[profileIndex])
+      });
     }
 
     if (method === "GET" && url.pathname === "/api/v2/admin/assets") {

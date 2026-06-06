@@ -43,6 +43,17 @@
       .replaceAll("'", "&#039;");
   }
 
+  function splitList(value) {
+    return String(value || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function optionList(options, value) {
+    return options.map((option) => `<option value="${esc(option)}" ${option === value ? "selected" : ""}>${esc(option)}</option>`).join("");
+  }
+
   function loadSession() {
     try {
       const saved = JSON.parse(localStorage.getItem("vuekumiAdminV2Session") || "null");
@@ -229,31 +240,41 @@
 
   function renderAccess() {
     const access = state.access || {};
+    const photoCategories = access.photoCategories || [];
+    const contributorTypes = access.contributorTypes || [];
     return `
       <div class="vk-grid">
         <section class="vk-panel full">
           <span class="vk-eyebrow">Access Control</span>
           <h2>Admin roles, user categories, and contributor permissions.</h2>
           <p>Admin determines exactly which contributor category can post into each image category.</p>
+          <button class="vk-button primary" data-action="save-access">Save Access Settings</button>
+        </section>
+        <section class="vk-panel full">
+          <h3>Editable lists</h3>
+          <div class="vk-form">
+            <label>Photo categories<input id="vkPhotoCategories" value="${esc(photoCategories.join(", "))}"></label>
+            <label>Contributor types<input id="vkContributorTypes" value="${esc(contributorTypes.join(", "))}"></label>
+            <label>Enduser types<input id="vkEnduserTypes" value="${esc((access.enduserTypes || []).join(", "))}"></label>
+          </div>
         </section>
         <section class="vk-panel">
-          <h3>Admin roles</h3>
-          <div class="vk-list">${(access.roles || []).map((role) => `
-            <article><strong>${esc(role.name)}</strong><p>${esc(role.description)}</p><span class="vk-status ${role.enabled ? "good" : "bad"}">${role.enabled ? "Enabled" : "Paused"}</span><p>${esc((role.permissions || []).join(", "))}</p></article>
-          `).join("")}</div>
+          <h3>Admin roles JSON</h3>
+          <div class="vk-form single"><label>Roles<textarea id="vkRolesJson">${esc(JSON.stringify(access.roles || [], null, 2))}</textarea></label></div>
         </section>
-        <section class="vk-panel">
-          <h3>User categories</h3>
-          <div class="vk-list">${(access.userCategories || []).map((category) => `
-            <article><strong>${esc(category.group)} / ${esc(category.name)}</strong><p>${esc(category.description)}</p><p>${esc((category.allowedContentCategories || []).join(", ") || "No posting categories")}</p></article>
-          `).join("")}</div>
+        <section class="vk-panel full">
+          <h3>User categories JSON</h3>
+          <div class="vk-form single"><label>Categories<textarea id="vkUserCategoriesJson">${esc(JSON.stringify(access.userCategories || [], null, 2))}</textarea></label></div>
         </section>
         <section class="vk-panel full">
           <h3>Contributor posting matrix</h3>
           <div class="vk-table">
-            <div class="vk-row header" style="--cols:3"><span>Contributor</span><span>Allowed image categories</span><span>Status</span></div>
-            ${Object.entries(access.contributorPermissions || {}).map(([type, categories]) => `
-              <div class="vk-row" style="--cols:3"><strong>${esc(type)}</strong><span>${esc(categories.join(", "))}</span><span class="vk-status good">Managed</span></div>
+            <div class="vk-row header" style="--cols:${photoCategories.length + 1}"><span>Contributor</span>${photoCategories.map((category) => `<span>${esc(category)}</span>`).join("")}</div>
+            ${contributorTypes.map((type) => `
+              <div class="vk-row" data-matrix-type="${esc(type)}" style="--cols:${photoCategories.length + 1}">
+                <strong>${esc(type)}</strong>
+                ${photoCategories.map((category) => `<label><input type="checkbox" data-matrix-category="${esc(category)}" ${(access.contributorPermissions?.[type] || []).includes(category) ? "checked" : ""}> ${esc(category)}</label>`).join("")}
+              </div>
             `).join("")}
           </div>
         </section>
@@ -262,15 +283,68 @@
   }
 
   function renderUsers() {
+    const categories = (state.access?.userCategories || []).map((category) => category.name);
+    const groups = ["Admin", "Contributor", "Enduser"];
+    const statuses = ["Active", "Pending", "Suspended", "Blocked"];
+    const verificationStatuses = ["Not Started", "OTP Verified", "Needs ID Review", "Procurement Review", "Verified", "Rejected"];
     return `
       <div class="vk-grid">
         <section class="vk-panel full">
           <span class="vk-eyebrow">User Directory</span>
           <h2>Admins, contributors, and end users.</h2>
+          <form class="vk-form" data-create-user>
+            <label>Name<input name="name" required></label>
+            <label>Phone<input name="phone"></label>
+            <label>Email<input name="email"></label>
+            <label>Group<select name="accountGroup">${optionList(groups, "Contributor")}</select></label>
+            <label>Category<input name="category" value="Photographers"></label>
+            <label>Country<input name="country" value="Nigeria"></label>
+            <button class="vk-button primary" type="submit">Add User</button>
+          </form>
           <div class="vk-table">
-            <div class="vk-row header" style="--cols:6"><span>Name</span><span>Group</span><span>Category</span><span>Country</span><span>Status</span><span>Verification</span></div>
+            <div class="vk-row header" style="--cols:8"><span>Name</span><span>Group</span><span>Category</span><span>Country</span><span>Status</span><span>Verification</span><span>Email</span><span>Action</span></div>
             ${(state.users?.items || []).map((user) => `
-              <div class="vk-row" style="--cols:6"><strong>${esc(user.name)}</strong><span>${esc(user.accountGroup)}</span><span>${esc(user.category)}</span><span>${esc(user.country)}</span><span class="vk-status ${statusClass(user.status)}">${esc(user.status)}</span><span>${esc(user.verificationStatus)}</span></div>
+              <div class="vk-row" data-user-row="${esc(user.id)}" style="--cols:8">
+                <input data-field="name" value="${esc(user.name)}">
+                <select data-field="accountGroup">${optionList(groups, user.accountGroup)}</select>
+                <input data-field="category" value="${esc(user.category)}" list="vkCategoryList">
+                <input data-field="country" value="${esc(user.country)}">
+                <select data-field="status">${optionList(statuses, user.status)}</select>
+                <select data-field="verificationStatus">${optionList(verificationStatuses, user.verificationStatus)}</select>
+                <input data-field="email" value="${esc(user.email)}">
+                <button class="vk-button" data-save-user="${esc(user.id)}">Save</button>
+              </div>
+            `).join("")}
+          </div>
+          <datalist id="vkCategoryList">${categories.map((category) => `<option value="${esc(category)}"></option>`).join("")}</datalist>
+        </section>
+      </div>
+    `;
+  }
+
+  function renderContributors() {
+    const countries = state.contributors?.allowedCountries || [];
+    const accessLevels = state.config?.config?.contributorAccessLevels?.map((level) => level.name) || ["Starter", "Verified", "Professional"];
+    const contributorTypes = state.access?.contributorTypes || ["Photo Content", "Models", "Photographers"];
+    return `
+      <div class="vk-grid">
+        <section class="vk-panel full">
+          <span class="vk-eyebrow">Contributor Verification</span>
+          <h2>African contributor onboarding, face match, ID, and agreements.</h2>
+          <div class="vk-table">
+            <div class="vk-row header" style="--cols:9"><span>Name</span><span>Type</span><span>Country</span><span>Access</span><span>Face</span><span>ID</span><span>Agreements</span><span>Sub</span><span>Action</span></div>
+            ${(state.contributors?.items || []).map((profile) => `
+              <div class="vk-row" data-contributor-row="${esc(profile.userId)}" style="--cols:9">
+                <strong>${esc(profile.user?.name || profile.userId)}</strong>
+                <select data-field="type">${optionList(contributorTypes, profile.type)}</select>
+                <select data-field="country">${optionList(countries, profile.country)}</select>
+                <select data-field="accessLevel">${optionList(accessLevels, profile.accessLevel)}</select>
+                <input data-field="faceScanScore" type="number" min="0" max="100" value="${esc(profile.faceScanScore || 0)}">
+                <select data-field="governmentId">${optionList(["false", "true"], String(Boolean(profile.governmentId)))}</select>
+                <select data-field="agreementsSigned">${optionList(["false", "true"], String(Boolean(profile.agreementsSigned && profile.contentAgreementSigned && profile.copyrightAgreementSigned)))}</select>
+                <select data-field="subscriptionActive">${optionList(["false", "true"], String(Boolean(profile.subscriptionActive)))}</select>
+                <button class="vk-button" data-save-contributor="${esc(profile.userId)}">Save</button>
+              </div>
             `).join("")}
           </div>
         </section>
@@ -278,35 +352,41 @@
     `;
   }
 
-  function renderContributors() {
-    return `
-      <div class="vk-grid">
-        <section class="vk-panel full">
-          <span class="vk-eyebrow">Contributor Verification</span>
-          <h2>African contributor onboarding, face match, ID, and agreements.</h2>
-        </section>
-        ${(state.contributors?.items || []).map((profile) => `
-          <section class="vk-panel third">
-            ${profileCard(profile)}
-            <p>Allowed: ${esc((profile.allowedCategories || []).join(", "))}</p>
-          </section>
-        `).join("")}
-      </div>
-    `;
-  }
-
   function renderContent() {
+    const categories = state.access?.photoCategories || [];
+    const contributorTypes = state.access?.contributorTypes || [];
+    const statuses = ["Approved", "Admin Review", "Release Review", "AI Enhancement", "Face/Copyright Verification", "Country Review", "Rejected"];
     return `
       <div class="vk-grid">
         <section class="vk-panel full">
           <span class="vk-eyebrow">Content Operations</span>
           <h2>Moderate images, AI enhancement, and face/copyright approval.</h2>
+          <form class="vk-form" data-create-asset>
+            <label>Title<input name="title" required></label>
+            <label>Category<select name="category">${optionList(categories, categories[0] || "Photo Content")}</select></label>
+            <label>Contributor type<select name="contributorType">${optionList(contributorTypes, contributorTypes[0] || "Photo Content")}</select></label>
+            <label>Country<input name="country" value="Nigeria"></label>
+            <label>Quality<input name="quality" type="number" min="0" max="100" value="80"></label>
+            <label>Contains faces<select name="faces">${optionList(["false", "true"], "false")}</select></label>
+            <button class="vk-button primary" type="submit">Add Content</button>
+          </form>
           <div class="vk-table">
-            <div class="vk-row header" style="--cols:7"><span>Title</span><span>Category</span><span>Country</span><span>Quality</span><span>Faces</span><span>Status</span><span>Action</span></div>
+            <div class="vk-row header" style="--cols:8"><span>Title</span><span>Category</span><span>Country</span><span>Quality</span><span>Faces</span><span>Status</span><span>Note</span><span>Actions</span></div>
             ${(state.assets?.items || []).map((asset) => `
-              <div class="vk-row" style="--cols:7">
-                <strong>${esc(asset.title)}</strong><span>${esc(asset.category)}</span><span>${esc(asset.country)}</span><span>${esc(asset.quality)}%</span><span>${asset.faces ? "Yes" : "No"}</span><span class="vk-status ${statusClass(asset.status)}">${esc(asset.status)}</span>
-                <span><button class="vk-button" data-approve="${esc(asset.id)}">Approve</button></span>
+              <div class="vk-row" data-asset-row="${esc(asset.id)}" style="--cols:8">
+                <input data-field="title" value="${esc(asset.title)}">
+                <select data-field="category">${optionList(categories, asset.category)}</select>
+                <input data-field="country" value="${esc(asset.country)}">
+                <input data-field="quality" type="number" min="0" max="100" value="${esc(asset.quality)}">
+                <select data-field="faces">${optionList(["false", "true"], String(Boolean(asset.faces)))}</select>
+                <select data-field="status">${optionList(statuses, asset.status)}</select>
+                <input data-field="moderationNote" value="${esc(asset.moderationNote || "")}">
+                <span class="vk-action-group">
+                  <button class="vk-button" data-save-asset="${esc(asset.id)}">Save</button>
+                  <button class="vk-button" data-approve="${esc(asset.id)}">Approve</button>
+                  <button class="vk-button" data-reject="${esc(asset.id)}">Reject</button>
+                  <button class="vk-button" data-enhance="${esc(asset.id)}">Enhance</button>
+                </span>
               </div>
             `).join("")}
           </div>
@@ -320,12 +400,20 @@
   function renderCommerce() {
     return `
       <div class="vk-grid">
-        <section class="vk-panel">
+        <section class="vk-panel full">
           <span class="vk-eyebrow">Orders</span>
           <h3>Buyer checkout</h3>
-          <div class="vk-list">${(state.commerce?.orders || []).map((order) => `<article><strong>${esc(order.orderNumber)}</strong><p>${esc(order.plan)} / ${esc(order.provider)} / ${esc(order.paymentStatus)}</p></article>`).join("") || "<p>No orders.</p>"}</div>
+          <div class="vk-table">
+            <div class="vk-row header" style="--cols:6"><span>Order</span><span>Plan</span><span>Provider</span><span>Amount</span><span>Status</span><span>Action</span></div>
+            ${(state.commerce?.orders || []).map((order) => `
+              <div class="vk-row" style="--cols:6">
+                <strong>${esc(order.orderNumber)}</strong><span>${esc(order.plan)}</span><span>${esc(order.provider)}</span><span>${esc(order.currency)} ${esc(order.amount)}</span><span>${esc(order.paymentStatus)}</span>
+                <button class="vk-button" data-pay-order="${esc(order.id)}">Authorize / Check Gateway</button>
+              </div>
+            `).join("") || `<p>No orders.</p>`}
+          </div>
         </section>
-        <section class="vk-panel">
+        <section class="vk-panel full">
           <span class="vk-eyebrow">Licenses</span>
           <h3>Image rights</h3>
           <div class="vk-list">${(state.commerce?.licenses || []).map((license) => `<article><strong>${esc(license.plan)}</strong><p>${esc(license.status)} / downloads ${esc(license.downloadsRemaining)}</p></article>`).join("") || "<p>No licenses.</p>"}</div>
@@ -336,20 +424,26 @@
 
   function renderIntegrations() {
     const config = state.integrations?.config || state.config?.config || {};
+    const integrations = state.integrations?.integrations || {};
     return `
       <div class="vk-grid">
         <section class="vk-panel full">
           <span class="vk-eyebrow">API Variables</span>
           <h2>Payment, payout, and SMS provider matrix.</h2>
           <p>Provider credentials remain environment secrets; admin manages provider names, key references, countries, and enabled status.</p>
+          <button class="vk-button primary" data-action="save-integrations">Save Integrations</button>
         </section>
         <section class="vk-panel">
           <h3>Payment providers</h3>
-          <div class="vk-list">${(state.integrations?.integrations?.paymentProviders || []).map(providerCard).join("")}</div>
+          <div class="vk-form single"><label>Payment providers JSON<textarea id="vkPaymentProvidersJson">${esc(JSON.stringify(config.paymentProviders || integrations.paymentProviders || [], null, 2))}</textarea></label></div>
         </section>
         <section class="vk-panel">
           <h3>Country payout rails</h3>
-          <div class="vk-list">${(state.integrations?.integrations?.countryGateways || []).map((gateway) => `<article><strong>${esc(gateway.country)}</strong><p>${esc(gateway.subscription)} / ${esc(gateway.payout)} / ${esc(gateway.sms)}</p><span class="vk-status ${gateway.credentialsLoaded ? "good" : "warn"}">${gateway.credentialsLoaded ? "Secret loaded" : esc(gateway.keyRef || "Key ref missing")}</span></article>`).join("")}</div>
+          <div class="vk-form single"><label>Country gateways JSON<textarea id="vkGatewaysJson">${esc(JSON.stringify(config.gateways || integrations.countryGateways || [], null, 2))}</textarea></label></div>
+        </section>
+        <section class="vk-panel full">
+          <h3>SMS providers</h3>
+          <div class="vk-form single"><label>SMS providers JSON<textarea id="vkSmsProvidersJson">${esc(JSON.stringify(config.smsProviders || integrations.smsProviders || [], null, 2))}</textarea></label></div>
         </section>
         <section class="vk-panel full">
           <h3>Raw configurable platform variables</h3>
@@ -398,6 +492,28 @@
     return "warn";
   }
 
+  function rowData(selector, id) {
+    const row = document.querySelector(`${selector}="${CSS.escape(id)}"]`);
+    const data = {};
+    row?.querySelectorAll("[data-field]").forEach((field) => {
+      const key = field.dataset.field;
+      if (field.type === "number") data[key] = Number(field.value || 0);
+      else if (["true", "false"].includes(field.value)) data[key] = field.value === "true";
+      else data[key] = field.value;
+    });
+    return data;
+  }
+
+  function formData(form) {
+    const data = {};
+    new FormData(form).forEach((value, key) => {
+      if (["true", "false"].includes(value)) data[key] = value === "true";
+      else if (key === "quality") data[key] = Number(value || 0);
+      else data[key] = value;
+    });
+    return data;
+  }
+
   async function login(event) {
     event.preventDefault();
     const identifier = document.getElementById("vkAdminIdentifier")?.value.trim();
@@ -428,11 +544,152 @@
     }
   }
 
+  async function rejectAsset(id) {
+    try {
+      await api(`/api/v2/admin/assets/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "Rejected", visibility: "Internal Review", moderationNote: "Rejected from admin review" })
+      });
+      toast("Asset rejected.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function enhanceAsset(id) {
+    try {
+      await api(`/api/v2/admin/assets/${encodeURIComponent(id)}/enhance`, { method: "POST" });
+      toast("AI enhancement recorded.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function saveAsset(id) {
+    try {
+      await api(`/api/v2/admin/assets/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(rowData('[data-asset-row', id))
+      });
+      toast("Asset saved.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function createAsset(form) {
+    try {
+      await api("/api/v2/admin/assets", { method: "POST", body: JSON.stringify(formData(form)) });
+      form.reset();
+      toast("Content added.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function saveUser(id) {
+    try {
+      await api(`/api/v2/admin/users/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(rowData('[data-user-row', id))
+      });
+      toast("User saved.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function createUser(form) {
+    try {
+      await api("/api/v2/admin/users", { method: "POST", body: JSON.stringify(formData(form)) });
+      form.reset();
+      toast("User added.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function saveContributor(userId) {
+    try {
+      const data = rowData('[data-contributor-row', userId);
+      if (data.agreementsSigned) {
+        data.contentAgreementSigned = true;
+        data.copyrightAgreementSigned = true;
+      }
+      data.faceScan = Number(data.faceScanScore || 0) > 0;
+      await api(`/api/v2/admin/contributors/${encodeURIComponent(userId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(data)
+      });
+      toast("Contributor saved.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function saveAccess() {
+    try {
+      const contributorPermissions = {};
+      document.querySelectorAll("[data-matrix-type]").forEach((row) => {
+        contributorPermissions[row.dataset.matrixType] = Array.from(row.querySelectorAll("[data-matrix-category]:checked")).map((input) => input.dataset.matrixCategory);
+      });
+      await api("/api/v2/admin/access", {
+        method: "PUT",
+        body: JSON.stringify({
+          roles: JSON.parse(document.getElementById("vkRolesJson").value),
+          userCategories: JSON.parse(document.getElementById("vkUserCategoriesJson").value),
+          photoCategories: splitList(document.getElementById("vkPhotoCategories").value),
+          contributorTypes: splitList(document.getElementById("vkContributorTypes").value),
+          enduserTypes: splitList(document.getElementById("vkEnduserTypes").value),
+          contributorPermissions
+        })
+      });
+      toast("Access settings saved.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
   async function saveConfig() {
     try {
       const config = JSON.parse(document.getElementById("vkConfigJson").value);
       await api("/api/v2/admin/config", { method: "PUT", body: JSON.stringify({ config }) });
       toast("Platform config saved.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function saveIntegrations() {
+    try {
+      await api("/api/v2/admin/integrations", {
+        method: "PUT",
+        body: JSON.stringify({
+          paymentProviders: JSON.parse(document.getElementById("vkPaymentProvidersJson").value),
+          gateways: JSON.parse(document.getElementById("vkGatewaysJson").value),
+          smsProviders: JSON.parse(document.getElementById("vkSmsProvidersJson").value)
+        })
+      });
+      toast("Integrations saved.");
+      await refresh();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function payOrder(id) {
+    try {
+      await api(`/api/v2/orders/${encodeURIComponent(id)}/pay`, { method: "POST" });
+      toast("Order payment status checked.");
       await refresh();
     } catch (error) {
       toast(error.message);
@@ -451,12 +708,34 @@
       renderLogin();
     }
     if (action === "save-config") await saveConfig();
+    if (action === "save-integrations") await saveIntegrations();
+    if (action === "save-access") await saveAccess();
     const approve = event.target.closest("[data-approve]")?.dataset.approve;
     if (approve) await approveAsset(approve);
+    const reject = event.target.closest("[data-reject]")?.dataset.reject;
+    if (reject) await rejectAsset(reject);
+    const enhance = event.target.closest("[data-enhance]")?.dataset.enhance;
+    if (enhance) await enhanceAsset(enhance);
+    const saveAssetId = event.target.closest("[data-save-asset]")?.dataset.saveAsset;
+    if (saveAssetId) await saveAsset(saveAssetId);
+    const saveUserId = event.target.closest("[data-save-user]")?.dataset.saveUser;
+    if (saveUserId) await saveUser(saveUserId);
+    const saveContributorId = event.target.closest("[data-save-contributor]")?.dataset.saveContributor;
+    if (saveContributorId) await saveContributor(saveContributorId);
+    const payOrderId = event.target.closest("[data-pay-order]")?.dataset.payOrder;
+    if (payOrderId) await payOrder(payOrderId);
   });
 
   document.addEventListener("submit", (event) => {
     if (event.target.matches("[data-login]")) login(event);
+    if (event.target.matches("[data-create-user]")) {
+      event.preventDefault();
+      createUser(event.target);
+    }
+    if (event.target.matches("[data-create-asset]")) {
+      event.preventDefault();
+      createAsset(event.target);
+    }
   });
 
   if (session) refresh().catch((error) => {

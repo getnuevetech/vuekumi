@@ -219,6 +219,17 @@ a {
   font-weight: 700;
 }
 
+.vk-row input,
+.vk-row select {
+  min-width: 0;
+}
+
+.vk-action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .vk-list {
   display: grid;
   gap: 8px;
@@ -235,6 +246,10 @@ a {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin: 10px 0;
+}
+
+.vk-form.single {
+  grid-template-columns: 1fr;
 }
 
 .vk-form label {
