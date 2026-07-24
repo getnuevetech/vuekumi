@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VUEKUMI Standalone Admin</title>
+    <link rel="stylesheet" href="./admin.css">
+  </head>
+  <body>
+    <header class="admin-header">
+      <div>
+        <strong>VUEKUMI Admin</strong>
+        <span>Standalone rebuild</span>
+      </div>
+      <nav>
+        <a href="/">Public site</a>
+        <button type="button" data-action="refresh">Refresh</button>
+        <button type="button" data-action="logout">Sign out</button>
+      </nav>
+    </header>
+
+    <nav class="tabs">
+      <button type="button" data-tab="dashboard">Dashboard</button>
+      <button type="button" data-tab="frontpage">Frontpage</button>
+      <button type="button" data-tab="users">Users</button>
+      <button type="button" data-tab="contributors">Contributors</button>
+      <button type="button" data-tab="assets">Assets</button>
+      <button type="button" data-tab="settings">Settings</button>
+      <button type="button" data-tab="audit">Audit</button>
+    </nav>
+
+    <main id="adminApp">
+      <section class="empty">Loading admin...</section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="./admin.js"></script>
+  </body>
+</html>

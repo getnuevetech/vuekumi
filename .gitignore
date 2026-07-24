@@ -6,6 +6,7 @@ node_modules/
 
 # Local runtime state
 .data/
+standalone/data/
 
 # Local verification screenshots
 admin-backend-access.png
