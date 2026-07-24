@@ -163,7 +163,16 @@
     const config = mergeConfig(saved.config || {});
     return {
       config,
-      session: saved.session || { role: "guest", userType: "", phone: "", otpSent: false, otpVerified: false },
+      session: {
+        role: "guest",
+        userType: "",
+        phone: "",
+        otpSent: false,
+        otpVerified: false,
+        contributorToken: "",
+        contributorTokenExpiresAt: 0,
+        ...(saved.session || {})
+      },
       contributor: {
         type: "Photographers",
         country: "Nigeria",
@@ -206,9 +215,7 @@
   }
 
   function queueBackendSave() {
-    if (!backendOnline) return;
     clearTimeout(backendSaveTimer);
-    backendSaveTimer = setTimeout(saveBackendState, 250);
   }
 
   function requestJson(method, url, body) {
@@ -217,6 +224,7 @@
       xhr.open(method, url, true);
       xhr.setRequestHeader("Accept", "application/json");
       if (body !== undefined) xhr.setRequestHeader("Content-Type", "application/json");
+      if (state?.session?.contributorToken) xhr.setRequestHeader("Authorization", `Bearer ${state.session.contributorToken}`);
       xhr.onload = () => {
         let payload = {};
         try {
@@ -245,7 +253,13 @@
     try {
       await requestJson("GET", "/api/health");
       backendOnline = true;
-      state = normalizeState(await requestJson("GET", "/api/state"));
+      const currentSession = state.session || {};
+      state = normalizeState({ ...state, ...(await requestJson("GET", "/api/state")) });
+      state.session = {
+        ...state.session,
+        contributorToken: currentSession.contributorToken || state.session.contributorToken || "",
+        contributorTokenExpiresAt: currentSession.contributorTokenExpiresAt || state.session.contributorTokenExpiresAt || 0
+      };
       localStorage.setItem("vuekumiMainPlatform", JSON.stringify(state, null, 2));
       if (byId("vkOverlay")?.classList.contains("open")) renderModal();
     } catch {
@@ -410,7 +424,9 @@
       const updated = await requestJson("POST", `/api/checkout/${encodeURIComponent(id)}/pay`);
       replaceCheckoutRecord(updated);
       persist();
-      toast(`Payment authorized for ${updated.orderNumber}.`);
+      toast(updated.paymentStatus === "Authorized"
+        ? `Payment authorized for ${updated.orderNumber}.`
+        : `${updated.orderNumber} is ready but requires live ${updated.provider} credentials.`);
       renderModal();
     } catch (error) {
       toast(error.message);
@@ -429,7 +445,7 @@
         const response = await requestJson("POST", "/api/auth/send-otp", { phone: state.session.phone });
         state.session.otpSent = Boolean(response.ok);
         persist();
-        toast(`OTP sent through configured SMS. Test OTP: ${response.otpPreview || "246810"}.`);
+        toast(response.otpPreview ? `OTP sent through configured SMS. Test OTP: ${response.otpPreview}.` : "OTP sent through configured SMS.");
         renderModal();
         return;
       } catch (error) {
@@ -438,7 +454,7 @@
     }
     state.session.otpSent = true;
     persist();
-    toast("OTP sent. Test OTP: 246810.");
+    toast("OTP sent locally. Test OTP: 246810.");
     renderModal();
   }
 
@@ -450,6 +466,10 @@
         const response = await requestJson("POST", "/api/auth/verify-otp", { phone: state.session.phone, otp });
         state.session.otpVerified = Boolean(response.verified);
         state.session.otpSent = true;
+        state.session.role = "Contributor";
+        state.session.userType = response.user?.category || state.session.userType || "Contributor";
+        state.session.contributorToken = response.token || "";
+        state.session.contributorTokenExpiresAt = response.expiresAt || 0;
         persist();
         toast("Mobile OTP verified.");
         renderModal();
@@ -481,6 +501,8 @@
         return;
       } catch (error) {
         toast(error.message);
+        renderModal();
+        return;
       }
     }
     state.contributor.faceScan = true;
@@ -502,6 +524,8 @@
         return;
       } catch (error) {
         toast(error.message);
+        renderModal();
+        return;
       }
     }
     state.contributor.subscriptionActive = true;
@@ -520,8 +544,10 @@
         toast(`Upload marked ${status}.`);
         renderModal();
         return;
-      } catch {
-        // Fall back to the local queue when the item has not synced yet.
+      } catch (error) {
+        toast(error.message);
+        renderModal();
+        return;
       }
     }
     const upload = state.uploads.find((item) => item.id === id);
@@ -541,8 +567,10 @@
         toast("AI enhancement queued and quality updated.");
         renderModal();
         return;
-      } catch {
-        // Fall back to local quality scoring when the item has not synced yet.
+      } catch (error) {
+        toast(error.message);
+        renderModal();
+        return;
       }
     }
     const upload = state.uploads.find((item) => item.id === id);
@@ -1239,7 +1267,7 @@
             <span>${esc(phone)}</span>
             <span>${esc(role)}</span>
             <span>${esc(path)}</span>
-            <span>246810</span>
+            <span>Generated per request</span>
           </div>
         `).join("")}
       </div>
@@ -1286,7 +1314,9 @@
           renderModal();
           return;
         } catch (error) {
-          toast(`Upload saved locally. ${error.message}`);
+          toast(error.message);
+          renderModal();
+          return;
         }
       }
       state.uploads.unshift(upload);

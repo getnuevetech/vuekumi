@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VUEKUMI Administration</title>
+    <link rel="stylesheet" href="./admin-v2.css">
+  </head>
+  <body>
+    <div class="vk-admin-shell">
+      <header class="vk-admin-header">
+        <a class="vk-admin-brand" href="./admin-v2.html">
+          <strong>VUEKUMI</strong>
+          <span>Administration</span>
+        </a>
+        <div class="vk-admin-actions">
+          <a href="./index.html">Public Site</a>
+          <a href="./admin.html">Legacy Admin</a>
+          <button type="button" data-action="refresh">Refresh</button>
+          <button type="button" data-action="logout">Sign Out</button>
+        </div>
+      </header>
+
+      <nav class="vk-admin-nav" aria-label="Administration sections">
+        <button type="button" data-view="dashboard">Dashboard</button>
+        <button type="button" data-view="access">Access</button>
+        <button type="button" data-view="users">Users</button>
+        <button type="button" data-view="contributors">Contributors</button>
+        <button type="button" data-view="content">Content</button>
+        <button type="button" data-view="commerce">Commerce</button>
+        <button type="button" data-view="integrations">Integrations</button>
+        <button type="button" data-view="activity">Activity</button>
+      </nav>
+
+      <main class="vk-admin-main">
+        <section class="vk-admin-titlebar">
+          <span id="vkAdminKicker">New Admin Backend</span>
+          <h1 id="vkAdminTitle">Platform Administration</h1>
+        </section>
+
+        <section id="vkAdminApp" class="vk-admin-app" aria-live="polite">
+          <div class="vk-empty">Loading VUEKUMI administration...</div>
+        </section>
+      </main>
+    </div>
+
+    <div id="vkAdminToast" class="vk-admin-toast" role="status"></div>
+    <script defer src="./admin-v2.js"></script>
+  </body>
+</html>
